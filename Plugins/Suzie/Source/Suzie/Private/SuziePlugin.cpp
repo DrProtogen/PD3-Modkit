@@ -46,6 +46,263 @@ namespace
     static FDelegateHandle GSuziePostEngineInitHandle;
     static FDelegateHandle GSuzieDoorPersistencePreSaveHandle;
 
+    // Retail memory-layout restoration is best-effort. In an Editor build it is
+    // normal for many native types to retain Unreal's editor layout instead of
+    // PAYDAY's shipping layout. Keep the detailed refusal reasons available for
+    // diagnostics without flooding normal startup/package logs.
+    static TAutoConsoleVariable<int32> CVarSuzieLogLayoutWarnings(
+        TEXT("suzie.LogLayoutWarnings"),
+        0,
+        TEXT("Controls detailed warnings when Suzie keeps Unreal's memory layout instead of applying the retail jmap layout.\n")
+        TEXT("0: Disabled (default)\n")
+        TEXT("1: Enabled"),
+        ECVF_Default);
+
+    static bool ShouldLogSuzieLayoutWarnings()
+    {
+        return CVarSuzieLogLayoutWarnings.GetValueOnAnyThread() != 0;
+    }
+
+    struct FSuzieRetailABIAuditStats
+    {
+        int32 CheckedTypes = 0;
+        int32 ExactCookedSerializationSchemas = 0;
+        int32 DynamicCookedSerializationMismatches = 0;
+        int32 NativeCookedSerializationMismatches = 0;
+        int32 ExactEnums = 0;
+        int32 DynamicEnumMismatches = 0;
+        int32 NativeEnumMismatches = 0;
+        int32 UnresolvedRetailReferences = 0;
+
+        // Physical C++/UStruct memory diagnostics are deliberately separate from
+        // cooked serialization compatibility.
+        int32 MemoryLayoutDifferences = 0;
+        int32 InheritedMemoryLayoutDifferences = 0;
+        int32 NativeLocalMemoryLayoutDifferences = 0;
+        int32 DynamicLocalMemoryLayoutDifferences = 0;
+        int32 DynamicRetailOpaqueTailDifferences = 0;
+        int32 AlignmentOnlyMemoryLayoutDifferences = 0;
+        int32 MemoryLayoutAlignmentDifferences = 0;
+
+        // Raw editor reflection is audited separately from cooked serialization.
+        // Count each owning type once, and count every direct property difference.
+        int32 EditorReflectionTypesWithDifferences = 0;
+        int32 EditorReflectionPropertyDifferences = 0;
+        int32 EditorReflectionSuperDifferences = 0;
+        int32 EditorReflectionEnumDifferences = 0;
+    };
+
+    static FSuzieRetailABIAuditStats GSuzieRetailABIAuditStats;
+    static TArray<FString> GSuzieRetailABIReportLines;
+    static TArray<FString> GSuzieEditorReflectionReportLines;
+    static TArray<FString> GSuzieNativeMemoryLayoutReportLines;
+
+    // Memory-layout diagnostics are accumulated by category so the final report
+    // can suppress inherited-only noise and present the actionable cases in
+    // stable, easy-to-scan sections.
+    static TArray<FString> GSuzieDynamicRetailOpaqueTailLines;
+    static TArray<FString> GSuzieDynamicLocalLayoutLines;
+    static TArray<FString> GSuzieNativeLocalLayoutLines;
+    static TArray<FString> GSuzieAlignmentOnlyLayoutLines;
+
+    static void ResetSuzieRetailABIAudit()
+    {
+        GSuzieRetailABIAuditStats = FSuzieRetailABIAuditStats{};
+
+        GSuzieRetailABIReportLines.Reset();
+        GSuzieRetailABIReportLines.Add(TEXT("Suzie PAYDAY 3 Cooked Serialization ABI Report (v4.5)"));
+        GSuzieRetailABIReportLines.Add(TEXT("=============================================="));
+        GSuzieRetailABIReportLines.Add(TEXT(""));
+        GSuzieRetailABIReportLines.Add(TEXT("This report compares the schema seen by cooked unversioned serialization."));
+        GSuzieRetailABIReportLines.Add(TEXT("CPF_EditorOnly properties are filtered from BOTH retail and live runtime schemas."));
+        GSuzieRetailABIReportLines.Add(TEXT("Physical C++/UStruct sizes are intentionally reported separately in NativeMemoryLayoutReport.txt."));
+        GSuzieRetailABIReportLines.Add(TEXT(""));
+
+        GSuzieEditorReflectionReportLines.Reset();
+        GSuzieEditorReflectionReportLines.Add(TEXT("Suzie PAYDAY 3 Editor Reflection Differences (v4.5)"));
+        GSuzieEditorReflectionReportLines.Add(TEXT("============================================="));
+        GSuzieEditorReflectionReportLines.Add(TEXT(""));
+        GSuzieEditorReflectionReportLines.Add(TEXT("This report compares RAW direct editor PropertyLink reflection against retail."));
+        GSuzieEditorReflectionReportLines.Add(TEXT("Differences are logged once on the owning type, not repeated through every child."));
+        GSuzieEditorReflectionReportLines.Add(TEXT("Physical memory sizes are intentionally excluded from this report."));
+        GSuzieEditorReflectionReportLines.Add(TEXT(""));
+
+        GSuzieNativeMemoryLayoutReportLines.Reset();
+        GSuzieDynamicRetailOpaqueTailLines.Reset();
+        GSuzieDynamicLocalLayoutLines.Reset();
+        GSuzieNativeLocalLayoutLines.Reset();
+        GSuzieAlignmentOnlyLayoutLines.Reset();
+
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Suzie PAYDAY 3 Native Memory Layout Diagnostics (v4.5)"));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("======================================================"));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("DIAGNOSTIC ONLY: a physical size/alignment difference does NOT imply cooked asset incompatibility."));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Retail is a shipping/game layout while this process is an Editor layout, so many differences are expected."));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Inherited-only entries are counted in the summary but intentionally suppressed from this file."));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Remaining entries are grouped by category and sorted by type path."));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("InheritedDelta is the parent-size difference; LocalDelta isolates the size introduced by this type itself."));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Set 'suzie.LogLayoutWarnings 1' to show detailed reasons when retail offsets cannot safely be applied."));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
+    }
+
+    static void AddSuzieRetailABIReportLine(const FString& Line)
+    {
+        GSuzieRetailABIReportLines.Add(Line);
+    }
+
+    static void AddSuzieEditorReflectionReportLine(const FString& Line)
+    {
+        GSuzieEditorReflectionReportLines.Add(Line);
+    }
+
+    static void AddSuzieGroupedMemoryLayoutLine(const FString& Classification, const FString& Line)
+    {
+        if (Classification == TEXT("DYNAMIC_RETAIL_OPAQUE_TAIL"))
+        {
+            GSuzieDynamicRetailOpaqueTailLines.Add(Line);
+        }
+        else if (Classification == TEXT("DYNAMIC_LOCAL_LAYOUT_DIFFERENCE"))
+        {
+            GSuzieDynamicLocalLayoutLines.Add(Line);
+        }
+        else if (Classification == TEXT("NATIVE_LOCAL_LAYOUT_DIFFERENCE"))
+        {
+            GSuzieNativeLocalLayoutLines.Add(Line);
+        }
+        else if (Classification == TEXT("ALIGNMENT_ONLY_DIFFERENCE"))
+        {
+            GSuzieAlignmentOnlyLayoutLines.Add(Line);
+        }
+    }
+
+    static void AppendSuzieMemoryLayoutGroup(
+        const TCHAR* Heading,
+        TArray<FString>& Lines)
+    {
+        if (Lines.IsEmpty())
+        {
+            return;
+        }
+
+        Lines.Sort();
+
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
+        GSuzieNativeMemoryLayoutReportLines.Add(FString::Printf(
+            TEXT("=== %s (%d) ==="),
+            Heading,
+            Lines.Num()));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
+
+        GSuzieNativeMemoryLayoutReportLines.Append(Lines);
+    }
+
+    static void NoteUnresolvedSuzieRetailReference(
+        const FString& PropertyName,
+        const FString& ReferenceKind,
+        const FString& ExpectedPath)
+    {
+        ++GSuzieRetailABIAuditStats.UnresolvedRetailReferences;
+
+        const FString Line = FString::Printf(
+            TEXT("[UNRESOLVED_RETAIL_REFERENCE] Property=%s Kind=%s Expected=%s"),
+            *PropertyName,
+            *ReferenceKind,
+            *ExpectedPath);
+
+        UE_LOG(LogSuzie, Warning, TEXT("%s"), *Line);
+        AddSuzieRetailABIReportLine(Line);
+    }
+
+    static void FlushSuzieRetailABIAuditReport()
+    {
+        const FString CookedSummary = FString::Printf(
+            TEXT("SUMMARY CheckedTypes=%d ExactCookedSerialization=%d DynamicCookedMismatches=%d NativeCookedMismatches=%d ExactEnums=%d DynamicEnumMismatches=%d NativeEnumMismatches=%d UnresolvedReferences=%d"),
+            GSuzieRetailABIAuditStats.CheckedTypes,
+            GSuzieRetailABIAuditStats.ExactCookedSerializationSchemas,
+            GSuzieRetailABIAuditStats.DynamicCookedSerializationMismatches,
+            GSuzieRetailABIAuditStats.NativeCookedSerializationMismatches,
+            GSuzieRetailABIAuditStats.ExactEnums,
+            GSuzieRetailABIAuditStats.DynamicEnumMismatches,
+            GSuzieRetailABIAuditStats.NativeEnumMismatches,
+            GSuzieRetailABIAuditStats.UnresolvedRetailReferences);
+
+        const FString EditorSummary = FString::Printf(
+            TEXT("SUMMARY TypesWithDifferences=%d PropertyDifferences=%d SuperStructDifferences=%d EnumDifferences=%d"),
+            GSuzieRetailABIAuditStats.EditorReflectionTypesWithDifferences,
+            GSuzieRetailABIAuditStats.EditorReflectionPropertyDifferences,
+            GSuzieRetailABIAuditStats.EditorReflectionSuperDifferences,
+            GSuzieRetailABIAuditStats.EditorReflectionEnumDifferences);
+
+        const int32 ReportedMemoryLayoutDifferences =
+            GSuzieRetailABIAuditStats.MemoryLayoutDifferences
+            - GSuzieRetailABIAuditStats.InheritedMemoryLayoutDifferences;
+
+        const FString MemorySummary = FString::Printf(
+            TEXT("SUMMARY Total=%d Reported=%d SuppressedInheritedOnly=%d NativeLocal=%d DynamicLocal=%d DynamicRetailOpaqueTail=%d AlignmentOnly=%d AnyAlignmentDifference=%d"),
+            GSuzieRetailABIAuditStats.MemoryLayoutDifferences,
+            ReportedMemoryLayoutDifferences,
+            GSuzieRetailABIAuditStats.InheritedMemoryLayoutDifferences,
+            GSuzieRetailABIAuditStats.NativeLocalMemoryLayoutDifferences,
+            GSuzieRetailABIAuditStats.DynamicLocalMemoryLayoutDifferences,
+            GSuzieRetailABIAuditStats.DynamicRetailOpaqueTailDifferences,
+            GSuzieRetailABIAuditStats.AlignmentOnlyMemoryLayoutDifferences,
+            GSuzieRetailABIAuditStats.MemoryLayoutAlignmentDifferences);
+
+        AddSuzieRetailABIReportLine(TEXT(""));
+        AddSuzieRetailABIReportLine(CookedSummary);
+
+        AddSuzieEditorReflectionReportLine(TEXT(""));
+        AddSuzieEditorReflectionReportLine(EditorSummary);
+
+        // Put the most relevant Suzie reconstruction differences first.
+        AppendSuzieMemoryLayoutGroup(
+            TEXT("DYNAMIC RETAIL OPAQUE TAILS"),
+            GSuzieDynamicRetailOpaqueTailLines);
+
+        AppendSuzieMemoryLayoutGroup(
+            TEXT("DYNAMIC LOCAL LAYOUT DIFFERENCES"),
+            GSuzieDynamicLocalLayoutLines);
+
+        AppendSuzieMemoryLayoutGroup(
+            TEXT("NATIVE LOCAL LAYOUT DIFFERENCES"),
+            GSuzieNativeLocalLayoutLines);
+
+        AppendSuzieMemoryLayoutGroup(
+            TEXT("ALIGNMENT-ONLY DIFFERENCES"),
+            GSuzieAlignmentOnlyLayoutLines);
+
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
+        GSuzieNativeMemoryLayoutReportLines.Add(MemorySummary);
+
+        const FString ReportDirectory = FPaths::ProjectSavedDir() / TEXT("Suzie");
+        IFileManager::Get().MakeDirectory(*ReportDirectory, true);
+
+        const FString CookedReportPath = ReportDirectory / TEXT("RetailABIReport.txt");
+        if (!FFileHelper::SaveStringArrayToFile(GSuzieRetailABIReportLines, *CookedReportPath))
+        {
+            UE_LOG(LogSuzie, Warning, TEXT("Failed to write cooked retail ABI report to %s"), *CookedReportPath);
+        }
+
+        const FString EditorReportPath = ReportDirectory / TEXT("EditorReflectionDifferences.txt");
+        if (!FFileHelper::SaveStringArrayToFile(GSuzieEditorReflectionReportLines, *EditorReportPath))
+        {
+            UE_LOG(LogSuzie, Warning, TEXT("Failed to write editor reflection report to %s"), *EditorReportPath);
+        }
+
+        const FString MemoryReportPath = ReportDirectory / TEXT("NativeMemoryLayoutReport.txt");
+        if (!FFileHelper::SaveStringArrayToFile(GSuzieNativeMemoryLayoutReportLines, *MemoryReportPath))
+        {
+            UE_LOG(LogSuzie, Warning, TEXT("Failed to write native memory-layout report to %s"), *MemoryReportPath);
+        }
+
+        UE_LOG(LogSuzie, Display, TEXT("Cooked retail ABI audit: %s"), *CookedSummary);
+        UE_LOG(LogSuzie, Display, TEXT("Cooked retail ABI report: %s"), *CookedReportPath);
+        UE_LOG(LogSuzie, Display, TEXT("Editor reflection audit: %s"), *EditorSummary);
+        UE_LOG(LogSuzie, Display, TEXT("Editor reflection report: %s"), *EditorReportPath);
+        UE_LOG(LogSuzie, Display, TEXT("Native memory-layout audit: %s"), *MemorySummary);
+        UE_LOG(LogSuzie, Display, TEXT("Native memory-layout report: %s"), *MemoryReportPath);
+    }
+
 
     // Some reconstructed retail classes contain large custom native Serialize() payloads
     // after their reflected properties. Suzie cannot synthesize a C++ virtual Serialize()
@@ -515,6 +772,8 @@ namespace
     }
 }
 
+static void AuditRetailSerializationABI(FDynamicClassGenerationContext& Context);
+
 #define LOCTEXT_NAMESPACE "FSuziePluginModule"
 
 void FSuziePluginModule::StartupModule()
@@ -573,6 +832,7 @@ void FSuziePluginModule::ShutdownModule()
 void FSuziePluginModule::ProcessAllJsonClassDefinitions()
 {
     
+        ResetSuzieRetailABIAudit();
     // Define where we expect JSON class definitions to be
     const FString JsonClassesPath = FPaths::ProjectContentDir() / TEXT("DynamicClasses");
     
@@ -668,6 +928,8 @@ void FSuziePluginModule::ProcessAllJsonClassDefinitions()
         }
         CreateDynamicClassesForJsonObject(JsonObject);
     }
+
+    FlushSuzieRetailABIAuditReport();
 }
 
 void FSuziePluginModule::CreateDynamicClassesForJsonObject(const TSharedPtr<FJsonObject>& RootObject)
@@ -745,7 +1007,9 @@ void FSuziePluginModule::CreateDynamicClassesForJsonObject(const TSharedPtr<FJso
         FinalizeClass(ClassGenerationContext, ClassPendingFinalization);
     }
 
-
+    // Audit after every reflected type in this jmap exists. Existing native
+    // engine/plugin types are never mutated here.
+    AuditRetailSerializationABI(ClassGenerationContext);
 }
 
 UPackage* FSuziePluginModule::FindOrCreatePackage(FDynamicClassGenerationContext& Context, const FString& PackageName)
@@ -963,7 +1227,10 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
 
     if (DumpedPropertiesSize < 0)
     {
-        UE_LOG(LogSuzie, Warning, TEXT("Keeping Unreal layout for %s: invalid jmap properties_size %d"), *Struct->GetPathName(), DumpedPropertiesSize);
+        if (ShouldLogSuzieLayoutWarnings())
+        {
+            UE_LOG(LogSuzie, Warning, TEXT("Keeping Unreal layout for %s: invalid jmap properties_size %d"), *Struct->GetPathName(), DumpedPropertiesSize);
+        }
         return false;
     }
 
@@ -971,9 +1238,12 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
     // whose runtime representation now requires stricter alignment.
     if (DumpedMinAlignment < Struct->GetMinAlignment())
     {
-        UE_LOG(LogSuzie, Warning,
-            TEXT("Keeping Unreal layout for %s: jmap alignment %d is smaller than runtime alignment %d"),
-            *Struct->GetPathName(), DumpedMinAlignment, Struct->GetMinAlignment());
+        if (ShouldLogSuzieLayoutWarnings())
+        {
+            UE_LOG(LogSuzie, Warning,
+                TEXT("Keeping Unreal layout for %s: jmap alignment %d is smaller than runtime alignment %d"),
+                *Struct->GetPathName(), DumpedMinAlignment, Struct->GetMinAlignment());
+        }
         return false;
     }
 
@@ -983,9 +1253,12 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
     {
         if (SuperStruct->GetPropertiesSize() > DumpedPropertiesSize)
         {
-            UE_LOG(LogSuzie, Warning,
-                TEXT("Keeping Unreal layout for %s: parent runtime size %d exceeds jmap type size %d"),
-                *Struct->GetPathName(), SuperStruct->GetPropertiesSize(), DumpedPropertiesSize);
+            if (ShouldLogSuzieLayoutWarnings())
+            {
+                UE_LOG(LogSuzie, Warning,
+                    TEXT("Keeping Unreal layout for %s: parent runtime size %d exceeds jmap type size %d"),
+                    *Struct->GetPathName(), SuperStruct->GetPropertiesSize(), DumpedPropertiesSize);
+            }
             return false;
         }
     }
@@ -1009,7 +1282,10 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
             const TSharedPtr<FJsonObject> Descriptor = DescriptorValue->AsObject();
             if (!Descriptor.IsValid())
             {
-                UE_LOG(LogSuzie, Warning, TEXT("Keeping Unreal layout for %s: invalid property descriptor in jmap"), *Struct->GetPathName());
+                if (ShouldLogSuzieLayoutWarnings())
+                {
+                    UE_LOG(LogSuzie, Warning, TEXT("Keeping Unreal layout for %s: invalid property descriptor in jmap"), *Struct->GetPathName());
+                }
                 return false;
             }
 
@@ -1017,9 +1293,12 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
             FProperty** PropertyPtr = DirectProperties.Find(PropertyName);
             if (PropertyPtr == nullptr || *PropertyPtr == nullptr)
             {
-                UE_LOG(LogSuzie, Warning,
-                    TEXT("Keeping Unreal layout for %s: jmap property %s was not reconstructed"),
-                    *Struct->GetPathName(), *PropertyName.ToString());
+                if (ShouldLogSuzieLayoutWarnings())
+                {
+                    UE_LOG(LogSuzie, Warning,
+                        TEXT("Keeping Unreal layout for %s: jmap property %s was not reconstructed"),
+                        *Struct->GetPathName(), *PropertyName.ToString());
+                }
                 return false;
             }
 
@@ -1034,9 +1313,12 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
             const int64 DumpedStorageSize64 = static_cast<int64>(Entry.DumpedElementSize) * static_cast<int64>(Entry.DumpedArrayDim);
             if (Entry.DumpedOffset < 0 || Entry.DumpedElementSize < 0 || DumpedStorageSize64 < 0 || DumpedStorageSize64 > MAX_int32)
             {
-                UE_LOG(LogSuzie, Warning,
-                    TEXT("Keeping Unreal layout for %s: invalid layout for property %s"),
-                    *Struct->GetPathName(), *Entry.Property->GetName());
+                if (ShouldLogSuzieLayoutWarnings())
+                {
+                    UE_LOG(LogSuzie, Warning,
+                        TEXT("Keeping Unreal layout for %s: invalid layout for property %s"),
+                        *Struct->GetPathName(), *Entry.Property->GetName());
+                }
                 return false;
             }
             Entry.DumpedStorageSize = static_cast<int32>(DumpedStorageSize64);
@@ -1047,9 +1329,12 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
     // the retail layout would leave that property at an unrelated synthetic offset.
     if (LayoutEntries.Num() != DirectProperties.Num())
     {
-        UE_LOG(LogSuzie, Warning,
-            TEXT("Keeping Unreal layout for %s: reconstructed property count %d does not match jmap property count %d"),
-            *Struct->GetPathName(), DirectProperties.Num(), LayoutEntries.Num());
+        if (ShouldLogSuzieLayoutWarnings())
+        {
+            UE_LOG(LogSuzie, Warning,
+                TEXT("Keeping Unreal layout for %s: reconstructed property count %d does not match jmap property count %d"),
+                *Struct->GetPathName(), DirectProperties.Num(), LayoutEntries.Num());
+        }
         return false;
     }
 
@@ -1069,17 +1354,23 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
 
         if (Entry.DumpedOffset < SuperPropertiesSize)
         {
-            UE_LOG(LogSuzie, Warning,
-                TEXT("Keeping Unreal layout for %s: property %s offset 0x%X overlaps parent runtime size 0x%X"),
-                *Struct->GetPathName(), *Entry.Property->GetName(), Entry.DumpedOffset, SuperPropertiesSize);
+            if (ShouldLogSuzieLayoutWarnings())
+            {
+                UE_LOG(LogSuzie, Warning,
+                    TEXT("Keeping Unreal layout for %s: property %s offset 0x%X overlaps parent runtime size 0x%X"),
+                    *Struct->GetPathName(), *Entry.Property->GetName(), Entry.DumpedOffset, SuperPropertiesSize);
+            }
             return false;
         }
 
         if ((Entry.DumpedOffset % RuntimeAlignment) != 0)
         {
-            UE_LOG(LogSuzie, Warning,
-                TEXT("Keeping Unreal layout for %s: property %s retail offset 0x%X is not aligned for runtime alignment %d"),
-                *Struct->GetPathName(), *Entry.Property->GetName(), Entry.DumpedOffset, RuntimeAlignment);
+            if (ShouldLogSuzieLayoutWarnings())
+            {
+                UE_LOG(LogSuzie, Warning,
+                    TEXT("Keeping Unreal layout for %s: property %s retail offset 0x%X is not aligned for runtime alignment %d"),
+                    *Struct->GetPathName(), *Entry.Property->GetName(), Entry.DumpedOffset, RuntimeAlignment);
+            }
             return false;
         }
 
@@ -1087,19 +1378,25 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
         // fixed-size arrays carry array_dim separately.
         if (RuntimeStorageSize > Entry.DumpedStorageSize || RuntimeStorageSize > SlotCapacity)
         {
-            UE_LOG(LogSuzie, Warning,
-                TEXT("Keeping Unreal layout for %s: property %s needs %d runtime bytes but retail slot provides %d bytes (offset=0x%X, element=%d x %d)"),
-                *Struct->GetPathName(), *Entry.Property->GetName(), RuntimeStorageSize,
-                FMath::Min(Entry.DumpedStorageSize, SlotCapacity), Entry.DumpedOffset,
-                Entry.DumpedElementSize, Entry.DumpedArrayDim);
+            if (ShouldLogSuzieLayoutWarnings())
+            {
+                UE_LOG(LogSuzie, Warning,
+                    TEXT("Keeping Unreal layout for %s: property %s needs %d runtime bytes but retail slot provides %d bytes (offset=0x%X, element=%d x %d)"),
+                    *Struct->GetPathName(), *Entry.Property->GetName(), RuntimeStorageSize,
+                    FMath::Min(Entry.DumpedStorageSize, SlotCapacity), Entry.DumpedOffset,
+                    Entry.DumpedElementSize, Entry.DumpedArrayDim);
+            }
             return false;
         }
 
         if (Entry.DumpedOffset + RuntimeStorageSize > DumpedPropertiesSize)
         {
-            UE_LOG(LogSuzie, Warning,
-                TEXT("Keeping Unreal layout for %s: property %s extends beyond jmap type size"),
-                *Struct->GetPathName(), *Entry.Property->GetName());
+            if (ShouldLogSuzieLayoutWarnings())
+            {
+                UE_LOG(LogSuzie, Warning,
+                    TEXT("Keeping Unreal layout for %s: property %s extends beyond jmap type size"),
+                    *Struct->GetPathName(), *Entry.Property->GetName());
+            }
             return false;
         }
     }
@@ -1118,6 +1415,1247 @@ static bool TryApplyJmapStructLayout(UStruct* Struct, const TSharedPtr<FJsonObje
         TEXT("Applied retail property offsets/layout to %s (size=%d alignment=%d)"),
         *Struct->GetPathName(), DumpedPropertiesSize, DumpedMinAlignment);
     return true;
+}
+
+// -----------------------------------------------------------------------------
+// PAYDAY 3 retail serialization ABI
+// -----------------------------------------------------------------------------
+//
+// Cooked unversioned property data is indexed by UStruct::PropertyLink. The
+// physical editor-memory offset of a property is NOT part of that serialized
+// index. Editor builds can legitimately have a larger in-memory representation
+// than PAYDAY's shipping build (multicast delegates are one common example).
+//
+// Therefore:
+//   * Cooked PropertyLink order/type/ArrayDim must match after CPF_EditorOnly filtering.
+//   * Physical offsets/PropertiesSize/MinAlignment are restored only when safe.
+//   * Existing native engine/plugin types are audited, never runtime-mutated.
+//   * Raw editor-only reflection differences are recorded separately.
+//   * Suzie-created types get their direct PropertyLink built from jmap at the
+//     point the type is constructed, before retail assets can deserialize.
+
+struct FSuzieJmapSchemaEntry
+{
+    FString OwnerPath;
+    FName PropertyName;
+    TSharedPtr<FJsonObject> Descriptor;
+};
+
+static bool IsSuzieDynamicReflectionType(const UStruct* Struct)
+{
+    return Struct != nullptr
+        && (Struct->HasMetaData(TEXT("SuzieDynamicClass"))
+            || Struct->HasMetaData(TEXT("SuzieDynamicStruct")));
+}
+
+static bool IsJmapEditorOnlyProperty(const TSharedPtr<FJsonObject>& Descriptor)
+{
+    return Descriptor.IsValid()
+        && Descriptor->HasTypedField<EJson::String>(TEXT("flags"))
+        && Descriptor->GetStringField(TEXT("flags")).Contains(TEXT("CPF_EditorOnly"));
+}
+
+static int32 GetJmapArrayDim(const TSharedPtr<FJsonObject>& Descriptor)
+{
+    return Descriptor.IsValid() && Descriptor->HasTypedField<EJson::Number>(TEXT("array_dim"))
+        ? FMath::Max(1, static_cast<int32>(Descriptor->GetIntegerField(TEXT("array_dim"))))
+        : 1;
+}
+
+static FString GetJmapPropertySignature(const TSharedPtr<FJsonObject>& Descriptor)
+{
+    if (!Descriptor.IsValid())
+    {
+        return TEXT("<invalid>");
+    }
+
+    const FString Type = Descriptor->GetStringField(TEXT("type"));
+
+    if (Type == TEXT("StructProperty") && Descriptor->HasTypedField<EJson::String>(TEXT("struct")))
+    {
+        return FString::Printf(TEXT("%s<%s>"), *Type, *Descriptor->GetStringField(TEXT("struct")));
+    }
+
+    if (Type == TEXT("EnumProperty") && Descriptor->HasTypedField<EJson::String>(TEXT("enum")))
+    {
+        FString ContainerSignature = TEXT("<null>");
+        if (Descriptor->HasTypedField<EJson::Object>(TEXT("container")))
+        {
+            ContainerSignature = GetJmapPropertySignature(Descriptor->GetObjectField(TEXT("container")));
+        }
+
+        return FString::Printf(
+            TEXT("%s<%s,%s>"),
+            *Type,
+            *Descriptor->GetStringField(TEXT("enum")),
+            *ContainerSignature);
+    }
+
+    if (Type == TEXT("ByteProperty") && Descriptor->HasTypedField<EJson::String>(TEXT("enum")))
+    {
+        return FString::Printf(TEXT("%s<%s>"), *Type, *Descriptor->GetStringField(TEXT("enum")));
+    }
+
+    if ((Type == TEXT("ArrayProperty") || Type == TEXT("OptionalProperty"))
+        && Descriptor->HasTypedField<EJson::Object>(TEXT("inner")))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *GetJmapPropertySignature(Descriptor->GetObjectField(TEXT("inner"))));
+    }
+
+    if (Type == TEXT("SetProperty") && Descriptor->HasTypedField<EJson::Object>(TEXT("key_prop")))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *GetJmapPropertySignature(Descriptor->GetObjectField(TEXT("key_prop"))));
+    }
+
+    if (Type == TEXT("MapProperty")
+        && Descriptor->HasTypedField<EJson::Object>(TEXT("key_prop"))
+        && Descriptor->HasTypedField<EJson::Object>(TEXT("value_prop")))
+    {
+        return FString::Printf(
+            TEXT("%s<%s,%s>"),
+            *Type,
+            *GetJmapPropertySignature(Descriptor->GetObjectField(TEXT("key_prop"))),
+            *GetJmapPropertySignature(Descriptor->GetObjectField(TEXT("value_prop"))));
+    }
+
+    if (Type == TEXT("InterfaceProperty") && Descriptor->HasTypedField<EJson::String>(TEXT("interface_class")))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *Descriptor->GetStringField(TEXT("interface_class")));
+    }
+
+    if ((Type == TEXT("DelegateProperty") || Type.Contains(TEXT("Multicast")))
+        && Descriptor->HasTypedField<EJson::String>(TEXT("signature_function")))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *Descriptor->GetStringField(TEXT("signature_function")));
+    }
+
+    if (Descriptor->HasTypedField<EJson::String>(TEXT("property_class")))
+    {
+        FString Signature = FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *Descriptor->GetStringField(TEXT("property_class")));
+
+        if ((Type == TEXT("ClassProperty") || Type == TEXT("SoftClassProperty"))
+            && Descriptor->HasTypedField<EJson::String>(TEXT("meta_class")))
+        {
+            Signature += FString::Printf(
+                TEXT("[%s]"),
+                *Descriptor->GetStringField(TEXT("meta_class")));
+        }
+
+        return Signature;
+    }
+
+    return Type;
+}
+
+static FString GetRuntimePropertySignature(const FProperty* Property)
+{
+    if (Property == nullptr)
+    {
+        return TEXT("<null>");
+    }
+
+    const FString Type = Property->GetClass()->GetName();
+
+    if (const FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            StructProperty->Struct ? *StructProperty->Struct->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FEnumProperty* EnumProperty = CastField<FEnumProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s,%s>"),
+            *Type,
+            EnumProperty->GetEnum() ? *EnumProperty->GetEnum()->GetPathName() : TEXT("<null>"),
+            *GetRuntimePropertySignature(EnumProperty->GetUnderlyingProperty()));
+    }
+
+    if (const FByteProperty* ByteProperty = CastField<FByteProperty>(Property))
+    {
+        return ByteProperty->Enum
+            ? FString::Printf(TEXT("%s<%s>"), *Type, *ByteProperty->Enum->GetPathName())
+            : Type;
+    }
+
+    if (const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *GetRuntimePropertySignature(ArrayProperty->Inner));
+    }
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
+    if (const FOptionalProperty* OptionalProperty = CastField<FOptionalProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *GetRuntimePropertySignature(OptionalProperty->GetValueProperty()));
+    }
+#endif
+
+    if (const FSetProperty* SetProperty = CastField<FSetProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            *GetRuntimePropertySignature(SetProperty->ElementProp));
+    }
+
+    if (const FMapProperty* MapProperty = CastField<FMapProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s,%s>"),
+            *Type,
+            *GetRuntimePropertySignature(MapProperty->KeyProp),
+            *GetRuntimePropertySignature(MapProperty->ValueProp));
+    }
+
+    if (const FClassProperty* ClassProperty = CastField<FClassProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>[%s]"),
+            *Type,
+            ClassProperty->PropertyClass ? *ClassProperty->PropertyClass->GetPathName() : TEXT("<null>"),
+            ClassProperty->MetaClass ? *ClassProperty->MetaClass->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FSoftClassProperty* SoftClassProperty = CastField<FSoftClassProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>[%s]"),
+            *Type,
+            SoftClassProperty->PropertyClass ? *SoftClassProperty->PropertyClass->GetPathName() : TEXT("<null>"),
+            SoftClassProperty->MetaClass ? *SoftClassProperty->MetaClass->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            ObjectProperty->PropertyClass ? *ObjectProperty->PropertyClass->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FInterfaceProperty* InterfaceProperty = CastField<FInterfaceProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            InterfaceProperty->InterfaceClass ? *InterfaceProperty->InterfaceClass->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FDelegateProperty* DelegateProperty = CastField<FDelegateProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            DelegateProperty->SignatureFunction ? *DelegateProperty->SignatureFunction->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FMulticastDelegateProperty* MulticastProperty = CastField<FMulticastDelegateProperty>(Property))
+    {
+        return FString::Printf(
+            TEXT("%s<%s>"),
+            *Type,
+            MulticastProperty->SignatureFunction ? *MulticastProperty->SignatureFunction->GetPathName() : TEXT("<null>"));
+    }
+
+    if (const FFieldPathProperty* FieldPathProperty = CastField<FFieldPathProperty>(Property))
+    {
+        const FString FieldClassName = FieldPathProperty->PropertyClass
+            ? FieldPathProperty->PropertyClass->GetName()
+            : TEXT("<null>");
+        return FString::Printf(TEXT("%s<%s>"), *Type, *FieldClassName);
+    }
+
+    return Type;
+}
+
+
+static bool AreJmapAndRuntimePropertySignaturesCompatible(
+    const TSharedPtr<FJsonObject>& RetailDescriptor,
+    const FProperty* RuntimeProperty)
+{
+    if (!RetailDescriptor.IsValid() || RuntimeProperty == nullptr)
+    {
+        return false;
+    }
+
+    const FString RetailType = RetailDescriptor->GetStringField(TEXT("type"));
+
+    // The supplied jmap encodes a small set of UE5 FOptionalProperty values as
+    // VerseStringProperty. The retail object dump confirms these are real
+    // OptionalProperty instances. Treat this as a mapping-format ambiguity only.
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
+    if (RetailType == TEXT("VerseStringProperty")
+        && CastField<FOptionalProperty>(RuntimeProperty) != nullptr)
+    {
+        return true;
+    }
+#endif
+
+    // Some retail FieldPathProperty records omit property_class entirely.
+    // Absence means "mapping did not provide the target FFieldClass", not that
+    // the live FFieldPathProperty is incompatible.
+    if (RetailType == TEXT("FieldPathProperty")
+        && !RetailDescriptor->HasTypedField<EJson::String>(TEXT("property_class"))
+        && CastField<FFieldPathProperty>(RuntimeProperty) != nullptr)
+    {
+        return true;
+    }
+
+    // Preserve the same wildcard behaviour when a FieldPathProperty is nested
+    // in a container (notably VariantManagerContent's Array<FieldPathProperty>).
+    if (RetailType == TEXT("ArrayProperty")
+        && RetailDescriptor->HasTypedField<EJson::Object>(TEXT("inner")))
+    {
+        if (const FArrayProperty* RuntimeArray = CastField<FArrayProperty>(RuntimeProperty))
+        {
+            return AreJmapAndRuntimePropertySignaturesCompatible(
+                RetailDescriptor->GetObjectField(TEXT("inner")),
+                RuntimeArray->Inner);
+        }
+    }
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
+    if (RetailType == TEXT("OptionalProperty")
+        && RetailDescriptor->HasTypedField<EJson::Object>(TEXT("inner")))
+    {
+        if (const FOptionalProperty* RuntimeOptional = CastField<FOptionalProperty>(RuntimeProperty))
+        {
+            return AreJmapAndRuntimePropertySignaturesCompatible(
+                RetailDescriptor->GetObjectField(TEXT("inner")),
+                RuntimeOptional->GetValueProperty());
+        }
+    }
+#endif
+
+    if (RetailType == TEXT("SetProperty")
+        && RetailDescriptor->HasTypedField<EJson::Object>(TEXT("key_prop")))
+    {
+        if (const FSetProperty* RuntimeSet = CastField<FSetProperty>(RuntimeProperty))
+        {
+            return AreJmapAndRuntimePropertySignaturesCompatible(
+                RetailDescriptor->GetObjectField(TEXT("key_prop")),
+                RuntimeSet->ElementProp);
+        }
+    }
+
+    if (RetailType == TEXT("MapProperty")
+        && RetailDescriptor->HasTypedField<EJson::Object>(TEXT("key_prop"))
+        && RetailDescriptor->HasTypedField<EJson::Object>(TEXT("value_prop")))
+    {
+        if (const FMapProperty* RuntimeMap = CastField<FMapProperty>(RuntimeProperty))
+        {
+            return AreJmapAndRuntimePropertySignaturesCompatible(
+                       RetailDescriptor->GetObjectField(TEXT("key_prop")),
+                       RuntimeMap->KeyProp)
+                && AreJmapAndRuntimePropertySignaturesCompatible(
+                       RetailDescriptor->GetObjectField(TEXT("value_prop")),
+                       RuntimeMap->ValueProp);
+        }
+    }
+
+    return GetJmapPropertySignature(RetailDescriptor) == GetRuntimePropertySignature(RuntimeProperty);
+}
+
+static void CollectDirectJmapPropertyDescriptors(
+    const TSharedPtr<FJsonObject>& Definition,
+    TArray<TSharedPtr<FJsonObject>>& OutDescriptors)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Properties = nullptr;
+    if (!Definition.IsValid() || !Definition->TryGetArrayField(TEXT("properties"), Properties))
+    {
+        return;
+    }
+
+    OutDescriptors.Reserve(Properties->Num());
+    for (const TSharedPtr<FJsonValue>& Value : *Properties)
+    {
+        const TSharedPtr<FJsonObject> Descriptor = Value->AsObject();
+        if (Descriptor.IsValid())
+        {
+            OutDescriptors.Add(Descriptor);
+        }
+    }
+}
+
+static bool CollectExpectedJmapSerializationSchema(
+    const FDynamicClassGenerationContext& Context,
+    const FString& StructPath,
+    TArray<FSuzieJmapSchemaEntry>& OutEntries,
+    TSet<FString>& Visited,
+    bool bSkipEditorOnly)
+{
+    if (!Context.GlobalObjectMap.IsValid() || StructPath.IsEmpty() || Visited.Contains(StructPath))
+    {
+        return false;
+    }
+
+    Visited.Add(StructPath);
+
+    const TSharedPtr<FJsonValue>* DefinitionValue = Context.GlobalObjectMap->Values.Find(StructPath);
+    if (DefinitionValue == nullptr)
+    {
+        return false;
+    }
+
+    const TSharedPtr<FJsonObject> Definition = (*DefinitionValue)->AsObject();
+    if (!Definition.IsValid())
+    {
+        return false;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Properties = nullptr;
+    if (Definition->TryGetArrayField(TEXT("properties"), Properties))
+    {
+        for (const TSharedPtr<FJsonValue>& Value : *Properties)
+        {
+            const TSharedPtr<FJsonObject> Descriptor = Value->AsObject();
+            if (!Descriptor.IsValid())
+            {
+                continue;
+            }
+
+            if (bSkipEditorOnly && IsJmapEditorOnlyProperty(Descriptor))
+            {
+                continue;
+            }
+
+            FSuzieJmapSchemaEntry& Entry = OutEntries.AddDefaulted_GetRef();
+            Entry.OwnerPath = StructPath;
+            Entry.PropertyName = FName(*Descriptor->GetStringField(TEXT("name")));
+            Entry.Descriptor = Descriptor;
+        }
+    }
+
+    FString SuperPath;
+    if (Definition->TryGetStringField(TEXT("super_struct"), SuperPath) && !SuperPath.IsEmpty())
+    {
+        CollectExpectedJmapSerializationSchema(Context, SuperPath, OutEntries, Visited, bSkipEditorOnly);
+    }
+
+    return true;
+}
+
+
+static void CollectRuntimePropertyLinkSchema(
+    UStruct* Struct,
+    TArray<FProperty*>& OutProperties,
+    bool bSkipEditorOnly)
+{
+    if (Struct == nullptr)
+    {
+        return;
+    }
+
+    for (FProperty* Property = Struct->PropertyLink;
+         Property != nullptr;
+         Property = Property->PropertyLinkNext)
+    {
+        if (bSkipEditorOnly && Property->IsEditorOnlyProperty())
+        {
+            continue;
+        }
+
+        OutProperties.Add(Property);
+    }
+}
+
+static void CollectRuntimeDirectPropertyLinkSchema(
+    UStruct* Struct,
+    TArray<FProperty*>& OutProperties)
+{
+    if (Struct == nullptr)
+    {
+        return;
+    }
+
+    for (FProperty* Property = Struct->PropertyLink;
+         Property != nullptr;
+         Property = Property->PropertyLinkNext)
+    {
+        const UObject* Owner = Property->GetOwnerUObject();
+        if (Owner == Struct)
+        {
+            OutProperties.Add(Property);
+        }
+    }
+}
+
+static FString DescribeJmapSchemaEntry(const FSuzieJmapSchemaEntry& Entry)
+{
+    return FString::Printf(
+        TEXT("%s:%s %s ArrayDim=%d EditorOnly=%d"),
+        *Entry.OwnerPath,
+        *Entry.PropertyName.ToString(),
+        *GetJmapPropertySignature(Entry.Descriptor),
+        GetJmapArrayDim(Entry.Descriptor),
+        IsJmapEditorOnlyProperty(Entry.Descriptor) ? 1 : 0);
+}
+
+static FString DescribeRuntimeProperty(const FProperty* Property)
+{
+    if (Property == nullptr)
+    {
+        return TEXT("<null>");
+    }
+
+    const UObject* Owner = Property->GetOwnerUObject();
+    return FString::Printf(
+        TEXT("%s:%s %s ArrayDim=%d EditorOnly=%d"),
+        Owner ? *Owner->GetPathName() : TEXT("<null>"),
+        *Property->GetName(),
+        *GetRuntimePropertySignature(Property),
+        Property->ArrayDim,
+        Property->IsEditorOnlyProperty() ? 1 : 0);
+}
+
+static bool JmapAndRuntimePropertyIdentityMatch(
+    const TSharedPtr<FJsonObject>& RetailDescriptor,
+    const FProperty* RuntimeProperty)
+{
+    if (!RetailDescriptor.IsValid() || RuntimeProperty == nullptr)
+    {
+        return false;
+    }
+
+    return FName(*RetailDescriptor->GetStringField(TEXT("name"))) == RuntimeProperty->GetFName();
+}
+
+static void AuditDirectEditorReflectionDifferences(
+    UStruct* Struct,
+    const TSharedPtr<FJsonObject>& Definition)
+{
+    if (Struct == nullptr || !Definition.IsValid())
+    {
+        return;
+    }
+
+    TArray<TSharedPtr<FJsonObject>> Retail;
+    CollectDirectJmapPropertyDescriptors(Definition, Retail);
+
+    TArray<FProperty*> Runtime;
+    CollectRuntimeDirectPropertyLinkSchema(Struct, Runtime);
+
+    bool bTypeHasDifference = false;
+
+    FString ExpectedSuperPath;
+    Definition->TryGetStringField(TEXT("super_struct"), ExpectedSuperPath);
+    const UStruct* RuntimeSuper = Struct->GetSuperStruct();
+    const FString RuntimeSuperPath = RuntimeSuper ? RuntimeSuper->GetPathName() : TEXT("");
+
+    if (ExpectedSuperPath != RuntimeSuperPath)
+    {
+        ++GSuzieRetailABIAuditStats.EditorReflectionSuperDifferences;
+        bTypeHasDifference = true;
+
+        AddSuzieEditorReflectionReportLine(FString::Printf(
+            TEXT("[EDITOR_SUPERSTRUCT_DIFFERENCE] Type=%s Retail=%s Runtime=%s"),
+            *Struct->GetPathName(),
+            ExpectedSuperPath.IsEmpty() ? TEXT("<none>") : *ExpectedSuperPath,
+            RuntimeSuperPath.IsEmpty() ? TEXT("<none>") : *RuntimeSuperPath));
+    }
+
+    int32 RetailIndex = 0;
+    int32 RuntimeIndex = 0;
+
+    auto LogPropertyDifference = [&](const TCHAR* Kind, const FString& Detail)
+    {
+        ++GSuzieRetailABIAuditStats.EditorReflectionPropertyDifferences;
+        bTypeHasDifference = true;
+
+        AddSuzieEditorReflectionReportLine(FString::Printf(
+            TEXT("[%s] Type=%s %s"),
+            Kind,
+            *Struct->GetPathName(),
+            *Detail));
+    };
+
+    while (RetailIndex < Retail.Num() || RuntimeIndex < Runtime.Num())
+    {
+        if (RetailIndex >= Retail.Num())
+        {
+            FProperty* RuntimeProperty = Runtime[RuntimeIndex++];
+            LogPropertyDifference(
+                RuntimeProperty && RuntimeProperty->IsEditorOnlyProperty()
+                    ? TEXT("EDITOR_ONLY_EXTRA_PROPERTY")
+                    : TEXT("EDITOR_EXTRA_PROPERTY"),
+                FString::Printf(
+                    TEXT("RuntimeIndex=%d Runtime=%s"),
+                    RuntimeIndex - 1,
+                    *DescribeRuntimeProperty(RuntimeProperty)));
+            continue;
+        }
+
+        if (RuntimeIndex >= Runtime.Num())
+        {
+            const TSharedPtr<FJsonObject>& RetailDescriptor = Retail[RetailIndex++];
+            FSuzieJmapSchemaEntry Entry;
+            Entry.OwnerPath = Struct->GetPathName();
+            Entry.PropertyName = FName(*RetailDescriptor->GetStringField(TEXT("name")));
+            Entry.Descriptor = RetailDescriptor;
+
+            LogPropertyDifference(
+                IsJmapEditorOnlyProperty(RetailDescriptor)
+                    ? TEXT("EDITOR_ONLY_MISSING_PROPERTY")
+                    : TEXT("EDITOR_MISSING_PROPERTY"),
+                FString::Printf(
+                    TEXT("RetailIndex=%d Retail=%s"),
+                    RetailIndex - 1,
+                    *DescribeJmapSchemaEntry(Entry)));
+            continue;
+        }
+
+        const TSharedPtr<FJsonObject>& RetailDescriptor = Retail[RetailIndex];
+        FProperty* RuntimeProperty = Runtime[RuntimeIndex];
+
+        if (JmapAndRuntimePropertyIdentityMatch(RetailDescriptor, RuntimeProperty))
+        {
+            const FString RetailSignature = GetJmapPropertySignature(RetailDescriptor);
+            const FString RuntimeSignature = GetRuntimePropertySignature(RuntimeProperty);
+            const int32 RetailArrayDim = GetJmapArrayDim(RetailDescriptor);
+            const bool bRetailEditorOnly = IsJmapEditorOnlyProperty(RetailDescriptor);
+
+            if (!AreJmapAndRuntimePropertySignaturesCompatible(RetailDescriptor, RuntimeProperty)
+                || RetailArrayDim != RuntimeProperty->ArrayDim
+                || bRetailEditorOnly != RuntimeProperty->IsEditorOnlyProperty())
+            {
+                LogPropertyDifference(
+                    TEXT("EDITOR_CHANGED_PROPERTY"),
+                    FString::Printf(
+                        TEXT("RetailIndex=%d RuntimeIndex=%d Name=%s Retail=%s ArrayDim=%d EditorOnly=%d Runtime=%s ArrayDim=%d EditorOnly=%d"),
+                        RetailIndex,
+                        RuntimeIndex,
+                        *RuntimeProperty->GetName(),
+                        *RetailSignature,
+                        RetailArrayDim,
+                        bRetailEditorOnly ? 1 : 0,
+                        *RuntimeSignature,
+                        RuntimeProperty->ArrayDim,
+                        RuntimeProperty->IsEditorOnlyProperty() ? 1 : 0));
+            }
+
+            ++RetailIndex;
+            ++RuntimeIndex;
+            continue;
+        }
+
+        // Editor-only runtime properties are the common shipping-vs-editor case.
+        // Log each insertion directly rather than allowing it to shift every later index.
+        if (RuntimeProperty != nullptr && RuntimeProperty->IsEditorOnlyProperty())
+        {
+            LogPropertyDifference(
+                TEXT("EDITOR_ONLY_EXTRA_PROPERTY"),
+                FString::Printf(
+                    TEXT("RuntimeIndex=%d Runtime=%s"),
+                    RuntimeIndex,
+                    *DescribeRuntimeProperty(RuntimeProperty)));
+            ++RuntimeIndex;
+            continue;
+        }
+
+        if (IsJmapEditorOnlyProperty(RetailDescriptor))
+        {
+            FSuzieJmapSchemaEntry Entry;
+            Entry.OwnerPath = Struct->GetPathName();
+            Entry.PropertyName = FName(*RetailDescriptor->GetStringField(TEXT("name")));
+            Entry.Descriptor = RetailDescriptor;
+
+            LogPropertyDifference(
+                TEXT("EDITOR_ONLY_MISSING_PROPERTY"),
+                FString::Printf(
+                    TEXT("RetailIndex=%d Retail=%s"),
+                    RetailIndex,
+                    *DescribeJmapSchemaEntry(Entry)));
+            ++RetailIndex;
+            continue;
+        }
+
+        // Align by property name so one insertion/removal does not cascade into
+        // hundreds of false "changed" lines.
+        int32 RetailNameInRuntime = INDEX_NONE;
+        for (int32 Search = RuntimeIndex + 1; Search < Runtime.Num(); ++Search)
+        {
+            if (JmapAndRuntimePropertyIdentityMatch(RetailDescriptor, Runtime[Search]))
+            {
+                RetailNameInRuntime = Search;
+                break;
+            }
+        }
+
+        int32 RuntimeNameInRetail = INDEX_NONE;
+        if (RuntimeProperty != nullptr)
+        {
+            for (int32 Search = RetailIndex + 1; Search < Retail.Num(); ++Search)
+            {
+                if (FName(*Retail[Search]->GetStringField(TEXT("name"))) == RuntimeProperty->GetFName())
+                {
+                    RuntimeNameInRetail = Search;
+                    break;
+                }
+            }
+        }
+
+        if (RetailNameInRuntime != INDEX_NONE
+            && (RuntimeNameInRetail == INDEX_NONE
+                || (RetailNameInRuntime - RuntimeIndex) <= (RuntimeNameInRetail - RetailIndex)))
+        {
+            while (RuntimeIndex < RetailNameInRuntime)
+            {
+                FProperty* ExtraProperty = Runtime[RuntimeIndex++];
+                LogPropertyDifference(
+                    ExtraProperty && ExtraProperty->IsEditorOnlyProperty()
+                        ? TEXT("EDITOR_ONLY_EXTRA_PROPERTY")
+                        : TEXT("EDITOR_EXTRA_PROPERTY"),
+                    FString::Printf(
+                        TEXT("RuntimeIndex=%d Runtime=%s"),
+                        RuntimeIndex - 1,
+                        *DescribeRuntimeProperty(ExtraProperty)));
+            }
+            continue;
+        }
+
+        if (RuntimeNameInRetail != INDEX_NONE)
+        {
+            while (RetailIndex < RuntimeNameInRetail)
+            {
+                const TSharedPtr<FJsonObject>& MissingDescriptor = Retail[RetailIndex++];
+                FSuzieJmapSchemaEntry Entry;
+                Entry.OwnerPath = Struct->GetPathName();
+                Entry.PropertyName = FName(*MissingDescriptor->GetStringField(TEXT("name")));
+                Entry.Descriptor = MissingDescriptor;
+
+                LogPropertyDifference(
+                    IsJmapEditorOnlyProperty(MissingDescriptor)
+                        ? TEXT("EDITOR_ONLY_MISSING_PROPERTY")
+                        : TEXT("EDITOR_MISSING_PROPERTY"),
+                    FString::Printf(
+                        TEXT("RetailIndex=%d Retail=%s"),
+                        RetailIndex - 1,
+                        *DescribeJmapSchemaEntry(Entry)));
+            }
+            continue;
+        }
+
+        FSuzieJmapSchemaEntry RetailEntry;
+        RetailEntry.OwnerPath = Struct->GetPathName();
+        RetailEntry.PropertyName = FName(*RetailDescriptor->GetStringField(TEXT("name")));
+        RetailEntry.Descriptor = RetailDescriptor;
+
+        LogPropertyDifference(
+            TEXT("EDITOR_PROPERTY_IDENTITY_DIFFERENCE"),
+            FString::Printf(
+                TEXT("RetailIndex=%d RuntimeIndex=%d Retail=%s Runtime=%s"),
+                RetailIndex,
+                RuntimeIndex,
+                *DescribeJmapSchemaEntry(RetailEntry),
+                *DescribeRuntimeProperty(RuntimeProperty)));
+
+        ++RetailIndex;
+        ++RuntimeIndex;
+    }
+
+    if (bTypeHasDifference)
+    {
+        ++GSuzieRetailABIAuditStats.EditorReflectionTypesWithDifferences;
+    }
+}
+
+static bool ApplyRetailSerializationPropertyLinkAtConstruction(
+    UStruct* Struct,
+    const TSharedPtr<FJsonObject>& Definition)
+{
+    if (Struct == nullptr || !Definition.IsValid())
+    {
+        return false;
+    }
+
+    TArray<TSharedPtr<FJsonObject>> DirectDescriptors;
+    CollectDirectJmapPropertyDescriptors(Definition, DirectDescriptors);
+
+    TMap<FName, FProperty*> RuntimeDirectProperties;
+    for (FField* Field = Struct->ChildProperties; Field != nullptr; Field = Field->Next)
+    {
+        if (FProperty* Property = CastField<FProperty>(Field))
+        {
+            RuntimeDirectProperties.Add(Property->GetFName(), Property);
+        }
+    }
+
+    if (RuntimeDirectProperties.Num() != DirectDescriptors.Num())
+    {
+        UE_LOG(
+            LogSuzie,
+            Error,
+            TEXT("[SUZIE_SERIALIZATION_ABI_MISMATCH] %s direct property count retail=%d runtime=%d"),
+            *Struct->GetPathName(),
+            DirectDescriptors.Num(),
+            RuntimeDirectProperties.Num());
+        return false;
+    }
+
+    TArray<FProperty*> RetailDirectOrder;
+    RetailDirectOrder.Reserve(DirectDescriptors.Num());
+
+    for (const TSharedPtr<FJsonObject>& Descriptor : DirectDescriptors)
+    {
+        const FName Name(*Descriptor->GetStringField(TEXT("name")));
+        FProperty** PropertyPtr = RuntimeDirectProperties.Find(Name);
+        if (PropertyPtr == nullptr || *PropertyPtr == nullptr)
+        {
+            UE_LOG(
+                LogSuzie,
+                Error,
+                TEXT("[SUZIE_SERIALIZATION_ABI_MISMATCH] %s missing retail property %s"),
+                *Struct->GetPathName(),
+                *Name.ToString());
+            return false;
+        }
+
+        FProperty* Property = *PropertyPtr;
+        const FString RetailSignature = GetJmapPropertySignature(Descriptor);
+        const FString RuntimeSignature = GetRuntimePropertySignature(Property);
+        const int32 RetailArrayDim = GetJmapArrayDim(Descriptor);
+        const bool bRetailEditorOnly = IsJmapEditorOnlyProperty(Descriptor);
+
+        if (!AreJmapAndRuntimePropertySignaturesCompatible(Descriptor, Property)
+            || RetailArrayDim != Property->ArrayDim
+            || bRetailEditorOnly != Property->IsEditorOnlyProperty())
+        {
+            UE_LOG(
+                LogSuzie,
+                Error,
+                TEXT("[SUZIE_SERIALIZATION_ABI_MISMATCH] %s:%s retail=%s ArrayDim=%d EditorOnly=%d runtime=%s ArrayDim=%d EditorOnly=%d"),
+                *Struct->GetPathName(),
+                *Name.ToString(),
+                *RetailSignature,
+                RetailArrayDim,
+                bRetailEditorOnly ? 1 : 0,
+                *RuntimeSignature,
+                Property->ArrayDim,
+                Property->IsEditorOnlyProperty() ? 1 : 0);
+            return false;
+        }
+
+        RetailDirectOrder.Add(Property);
+    }
+
+    FProperty* SuperPropertyLink = Struct->GetSuperStruct()
+        ? Struct->GetSuperStruct()->PropertyLink
+        : nullptr;
+
+    for (int32 Index = 0; Index < RetailDirectOrder.Num(); ++Index)
+    {
+        RetailDirectOrder[Index]->PropertyLinkNext =
+            (Index + 1 < RetailDirectOrder.Num())
+                ? RetailDirectOrder[Index + 1]
+                : SuperPropertyLink;
+    }
+
+    Struct->PropertyLink = RetailDirectOrder.Num() > 0
+        ? RetailDirectOrder[0]
+        : SuperPropertyLink;
+
+    return true;
+}
+
+static bool AuditOneRetailSerializationType(
+    const FDynamicClassGenerationContext& Context,
+    UStruct* Struct,
+    const TSharedPtr<FJsonObject>& Definition)
+{
+    if (Struct == nullptr || !Definition.IsValid())
+    {
+        return false;
+    }
+
+    ++GSuzieRetailABIAuditStats.CheckedTypes;
+
+    // Audit the raw editor reflection separately so editor-only insertions are
+    // preserved for later cleanup without being treated as cooked ABI failures.
+    AuditDirectEditorReflectionDifferences(Struct, Definition);
+
+    // Cooked unversioned serialization filters CPF_EditorOnly. Mirror that here
+    // on BOTH sides before comparing slot counts/order.
+    TArray<FSuzieJmapSchemaEntry> ExpectedCooked;
+    TSet<FString> Visited;
+    CollectExpectedJmapSerializationSchema(
+        Context,
+        Struct->GetPathName(),
+        ExpectedCooked,
+        Visited,
+        /*bSkipEditorOnly=*/true);
+
+    TArray<FProperty*> RuntimeCooked;
+    CollectRuntimePropertyLinkSchema(
+        Struct,
+        RuntimeCooked,
+        /*bSkipEditorOnly=*/true);
+
+    bool bCookedSerializationExact = RuntimeCooked.Num() == ExpectedCooked.Num();
+    FString FirstMismatch;
+
+    FString ExpectedSuperPath;
+    Definition->TryGetStringField(TEXT("super_struct"), ExpectedSuperPath);
+    const UStruct* RuntimeSuper = Struct->GetSuperStruct();
+    const FString RuntimeSuperPath = RuntimeSuper ? RuntimeSuper->GetPathName() : TEXT("");
+
+    if (ExpectedSuperPath != RuntimeSuperPath)
+    {
+        bCookedSerializationExact = false;
+        FirstMismatch = FString::Printf(
+            TEXT("SuperStruct Retail=%s Runtime=%s"),
+            ExpectedSuperPath.IsEmpty() ? TEXT("<none>") : *ExpectedSuperPath,
+            RuntimeSuperPath.IsEmpty() ? TEXT("<none>") : *RuntimeSuperPath);
+    }
+
+    const int32 SharedCount = FMath::Min(RuntimeCooked.Num(), ExpectedCooked.Num());
+    for (int32 Index = 0; Index < SharedCount && FirstMismatch.IsEmpty(); ++Index)
+    {
+        FProperty* RuntimeProperty = RuntimeCooked[Index];
+        const FSuzieJmapSchemaEntry& ExpectedEntry = ExpectedCooked[Index];
+
+        const UObject* RuntimeOwner = RuntimeProperty ? RuntimeProperty->GetOwnerUObject() : nullptr;
+        const FString RuntimeOwnerPath = RuntimeOwner ? RuntimeOwner->GetPathName() : TEXT("<null>");
+        const FString RuntimeSignature = GetRuntimePropertySignature(RuntimeProperty);
+        const FString ExpectedSignature = GetJmapPropertySignature(ExpectedEntry.Descriptor);
+        const int32 ExpectedArrayDim = GetJmapArrayDim(ExpectedEntry.Descriptor);
+
+        if (RuntimeOwnerPath != ExpectedEntry.OwnerPath
+            || RuntimeProperty == nullptr
+            || RuntimeProperty->GetFName() != ExpectedEntry.PropertyName
+            || !AreJmapAndRuntimePropertySignaturesCompatible(ExpectedEntry.Descriptor, RuntimeProperty)
+            || RuntimeProperty->ArrayDim != ExpectedArrayDim)
+        {
+            bCookedSerializationExact = false;
+            FirstMismatch = FString::Printf(
+                TEXT("CookedIndex=%d Retail=%s:%s %s ArrayDim=%d Runtime=%s:%s %s ArrayDim=%d"),
+                Index,
+                *ExpectedEntry.OwnerPath,
+                *ExpectedEntry.PropertyName.ToString(),
+                *ExpectedSignature,
+                ExpectedArrayDim,
+                *RuntimeOwnerPath,
+                RuntimeProperty ? *RuntimeProperty->GetName() : TEXT("<null>"),
+                *RuntimeSignature,
+                RuntimeProperty ? RuntimeProperty->ArrayDim : 0);
+            break;
+        }
+    }
+
+    if (RuntimeCooked.Num() != ExpectedCooked.Num() && FirstMismatch.IsEmpty())
+    {
+        FirstMismatch = FString::Printf(
+            TEXT("CookedPropertyCount Retail=%d Runtime=%d"),
+            ExpectedCooked.Num(),
+            RuntimeCooked.Num());
+    }
+
+    const bool bDynamic = IsSuzieDynamicReflectionType(Struct);
+    if (bCookedSerializationExact)
+    {
+        ++GSuzieRetailABIAuditStats.ExactCookedSerializationSchemas;
+    }
+    else
+    {
+        if (bDynamic)
+        {
+            ++GSuzieRetailABIAuditStats.DynamicCookedSerializationMismatches;
+        }
+        else
+        {
+            ++GSuzieRetailABIAuditStats.NativeCookedSerializationMismatches;
+        }
+
+        const TCHAR* Kind = bDynamic
+            ? TEXT("SUZIE_COOKED_ABI_MISMATCH")
+            : TEXT("NATIVE_COOKED_ABI_MISMATCH");
+
+        const FString Line = FString::Printf(
+            TEXT("[%s] Type=%s %s"),
+            Kind,
+            *Struct->GetPathName(),
+            *FirstMismatch);
+
+        UE_LOG(LogSuzie, Warning, TEXT("%s"), *Line);
+        AddSuzieRetailABIReportLine(Line);
+    }
+
+    if (Definition->HasTypedField<EJson::Number>(TEXT("properties_size"))
+        && Definition->HasTypedField<EJson::Number>(TEXT("min_alignment")))
+    {
+        const int32 RetailPropertiesSize = static_cast<int32>(Definition->GetIntegerField(TEXT("properties_size")));
+        const int32 RetailMinAlignment = FMath::Max(
+            1,
+            static_cast<int32>(Definition->GetIntegerField(TEXT("min_alignment"))));
+
+        if (Struct->GetPropertiesSize() != RetailPropertiesSize
+            || Struct->GetMinAlignment() != RetailMinAlignment)
+        {
+            ++GSuzieRetailABIAuditStats.MemoryLayoutDifferences;
+
+            FString RetailSuperPath;
+            Definition->TryGetStringField(TEXT("super_struct"), RetailSuperPath);
+
+            int32 RetailSuperSize = 0;
+            if (!RetailSuperPath.IsEmpty() && Context.GlobalObjectMap.IsValid())
+            {
+                if (const TSharedPtr<FJsonValue>* SuperDefinitionValue = Context.GlobalObjectMap->Values.Find(RetailSuperPath))
+                {
+                    const TSharedPtr<FJsonObject> SuperDefinition = (*SuperDefinitionValue)->AsObject();
+                    if (SuperDefinition.IsValid()
+                        && SuperDefinition->HasTypedField<EJson::Number>(TEXT("properties_size")))
+                    {
+                        RetailSuperSize = static_cast<int32>(
+                            SuperDefinition->GetIntegerField(TEXT("properties_size")));
+                    }
+                }
+            }
+
+            const UStruct* LayoutRuntimeSuper = Struct->GetSuperStruct();
+            const int32 RuntimeSuperSize = LayoutRuntimeSuper ? LayoutRuntimeSuper->GetPropertiesSize() : 0;
+
+            const int32 RetailLocalSize = RetailPropertiesSize - RetailSuperSize;
+            const int32 RuntimeLocalSize = Struct->GetPropertiesSize() - RuntimeSuperSize;
+            const int32 InheritedDelta = RuntimeSuperSize - RetailSuperSize;
+            const int32 LocalDelta = RuntimeLocalSize - RetailLocalSize;
+            const int32 TotalDelta = Struct->GetPropertiesSize() - RetailPropertiesSize;
+            const bool bAlignmentDifference = Struct->GetMinAlignment() != RetailMinAlignment;
+
+            if (bAlignmentDifference)
+            {
+                ++GSuzieRetailABIAuditStats.MemoryLayoutAlignmentDifferences;
+            }
+
+            int32 DirectEditorOnlyPropertyCount = 0;
+            for (FProperty* Property = Struct->PropertyLink;
+                 Property != nullptr;
+                 Property = Property->PropertyLinkNext)
+            {
+                if (Property->GetOwnerUObject() == Struct && Property->IsEditorOnlyProperty())
+                {
+                    ++DirectEditorOnlyPropertyCount;
+                }
+            }
+
+            const TCHAR* Classification = TEXT("NATIVE_LOCAL_LAYOUT_DIFFERENCE");
+
+            if (LocalDelta == 0 && InheritedDelta != 0)
+            {
+                Classification = TEXT("INHERITED_LAYOUT_DIFFERENCE");
+                ++GSuzieRetailABIAuditStats.InheritedMemoryLayoutDifferences;
+            }
+            else if (LocalDelta == 0 && InheritedDelta == 0 && bAlignmentDifference)
+            {
+                Classification = TEXT("ALIGNMENT_ONLY_DIFFERENCE");
+                ++GSuzieRetailABIAuditStats.AlignmentOnlyMemoryLayoutDifferences;
+            }
+            else if (bDynamic && RetailLocalSize > RuntimeLocalSize)
+            {
+                Classification = TEXT("DYNAMIC_RETAIL_OPAQUE_TAIL");
+                ++GSuzieRetailABIAuditStats.DynamicRetailOpaqueTailDifferences;
+            }
+            else if (bDynamic)
+            {
+                Classification = TEXT("DYNAMIC_LOCAL_LAYOUT_DIFFERENCE");
+                ++GSuzieRetailABIAuditStats.DynamicLocalMemoryLayoutDifferences;
+            }
+            else
+            {
+                ++GSuzieRetailABIAuditStats.NativeLocalMemoryLayoutDifferences;
+            }
+
+            // Inherited-only entries add no local layout information and were
+            // more than half of the old report, so count them but do not emit a
+            // per-type report/log line.
+            if (FCString::Strcmp(Classification, TEXT("INHERITED_LAYOUT_DIFFERENCE")) != 0)
+            {
+                const FString Line = FString::Printf(
+                    TEXT("[%s] Type=%s Dynamic=%d RetailSize=%d RuntimeSize=%d RetailSuperSize=%d RuntimeSuperSize=%d RetailLocalSize=%d RuntimeLocalSize=%d InheritedDelta=%+d LocalDelta=%+d TotalDelta=%+d RetailAlignment=%d RuntimeAlignment=%d DirectEditorOnlyProperties=%d CookedSerializationExact=%d"),
+                    Classification,
+                    *Struct->GetPathName(),
+                    bDynamic ? 1 : 0,
+                    RetailPropertiesSize,
+                    Struct->GetPropertiesSize(),
+                    RetailSuperSize,
+                    RuntimeSuperSize,
+                    RetailLocalSize,
+                    RuntimeLocalSize,
+                    InheritedDelta,
+                    LocalDelta,
+                    TotalDelta,
+                    RetailMinAlignment,
+                    Struct->GetMinAlignment(),
+                    DirectEditorOnlyPropertyCount,
+                    bCookedSerializationExact ? 1 : 0);
+
+                AddSuzieGroupedMemoryLayoutLine(Classification, Line);
+                UE_LOG(LogSuzie, VeryVerbose, TEXT("%s"), *Line);
+            }
+        }
+    }
+
+    return bCookedSerializationExact;
+}
+
+
+static void AuditOneRetailEnum(
+    UEnum* Enum,
+    const TSharedPtr<FJsonObject>& Definition)
+{
+    if (Enum == nullptr || !Definition.IsValid())
+    {
+        return;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* RetailNames = nullptr;
+    if (!Definition->TryGetArrayField(TEXT("names"), RetailNames))
+    {
+        return;
+    }
+
+    bool bExact = Enum->NumEnums() == RetailNames->Num();
+    FString FirstMismatch;
+
+    const int32 Shared = FMath::Min(Enum->NumEnums(), RetailNames->Num());
+    for (int32 Index = 0; Index < Shared && FirstMismatch.IsEmpty(); ++Index)
+    {
+        const TArray<TSharedPtr<FJsonValue>>& Pair = (*RetailNames)[Index]->AsArray();
+        if (Pair.Num() != 2)
+        {
+            bExact = false;
+            FirstMismatch = FString::Printf(TEXT("Invalid retail enum record at index %d"), Index);
+            break;
+        }
+
+        const FName RetailName(*Pair[0]->AsString());
+        const double RetailNumber = Pair[1]->AsNumber();
+        const int64 RetailValue = static_cast<int64>(RetailNumber);
+        const FName RuntimeName = Enum->GetNameByIndex(Index);
+        const int64 RuntimeValue = Enum->GetValueByIndex(Index);
+
+        // FJson stores JSON numbers as doubles. Integers above 2^53 cannot be
+        // trusted at single-unit precision (for example 2^58 + 1 rounds to 2^58).
+        // Name/order is still authoritative; numeric comparison is authoritative
+        // only inside IEEE-754's exact integer range.
+        constexpr double MaxExactJsonInteger = 9007199254740992.0; // 2^53
+        const bool bRetailValueIsIntegerSafe =
+            FMath::Abs(RetailNumber) <= MaxExactJsonInteger;
+
+        if (RetailName != RuntimeName
+            || (bRetailValueIsIntegerSafe && RetailValue != RuntimeValue))
+        {
+            bExact = false;
+            FirstMismatch = FString::Printf(
+                TEXT("Index=%d Retail=%s=%lld Runtime=%s=%lld"),
+                Index,
+                *RetailName.ToString(),
+                static_cast<long long>(RetailValue),
+                *RuntimeName.ToString(),
+                static_cast<long long>(RuntimeValue));
+        }
+    }
+
+    if (Enum->NumEnums() != RetailNames->Num() && FirstMismatch.IsEmpty())
+    {
+        FirstMismatch = FString::Printf(
+            TEXT("ValueCount Retail=%d Runtime=%d"),
+            RetailNames->Num(),
+            Enum->NumEnums());
+    }
+
+    const bool bDynamic = Enum->HasMetaData(TEXT("SuzieDynamicEnum"));
+
+    if (bExact)
+    {
+        ++GSuzieRetailABIAuditStats.ExactEnums;
+        return;
+    }
+
+    if (bDynamic)
+    {
+        ++GSuzieRetailABIAuditStats.DynamicEnumMismatches;
+    }
+    else
+    {
+        ++GSuzieRetailABIAuditStats.NativeEnumMismatches;
+    }
+
+    const FString Line = FString::Printf(
+        TEXT("[%s] Enum=%s %s"),
+        bDynamic ? TEXT("SUZIE_ENUM_ABI_MISMATCH") : TEXT("NATIVE_ENUM_ABI_MISMATCH"),
+        *Enum->GetPathName(),
+        *FirstMismatch);
+
+    UE_LOG(LogSuzie, Warning, TEXT("%s"), *Line);
+    AddSuzieRetailABIReportLine(Line);
+
+    ++GSuzieRetailABIAuditStats.EditorReflectionEnumDifferences;
+    AddSuzieEditorReflectionReportLine(FString::Printf(
+        TEXT("[EDITOR_ENUM_DIFFERENCE] %s"),
+        *Line));
+}
+
+static void AuditRetailSerializationABI(FDynamicClassGenerationContext& Context)
+{
+    if (!Context.GlobalObjectMap.IsValid())
+    {
+        return;
+    }
+
+    for (auto It = Context.GlobalObjectMap->Values.CreateConstIterator(); It; ++It)
+    {
+        const FString ObjectPath = It.Key();
+        const TSharedPtr<FJsonObject> Definition = It.Value()->AsObject();
+        if (!Definition.IsValid())
+        {
+            continue;
+        }
+
+        const FString Type = Definition->GetStringField(TEXT("type"));
+        if (Type == TEXT("Enum"))
+        {
+            if (UEnum* RuntimeEnum = FindObject<UEnum>(nullptr, *ObjectPath))
+            {
+                AuditOneRetailEnum(RuntimeEnum, Definition);
+            }
+            continue;
+        }
+
+        if (Type != TEXT("Class") && Type != TEXT("ScriptStruct"))
+        {
+            continue;
+        }
+
+        UStruct* RuntimeStruct = FindObject<UStruct>(nullptr, *ObjectPath);
+        if (RuntimeStruct == nullptr)
+        {
+            continue;
+        }
+
+        AuditOneRetailSerializationType(Context, RuntimeStruct, Definition);
+    }
 }
 
 // Internal property type injected into DestructorLink of dynamic classes to force the destruction of their properties (despite the class being marked as native)
@@ -1376,43 +2914,15 @@ UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Co
     TArray<const FProperty*> PropertiesWithConstructor;
     FArchive EmptyPropertyLinkArchive;
 
-    // Add properties to the class
+    // Add properties to the class.
+    //
+    // The retail jmap is the serialization ABI. Do not add editor-facing flags
+    // that the retail property did not actually have.
     const TArray<TSharedPtr<FJsonValue>>& Properties = ClassDefinition->GetArrayField(TEXT("properties"));
     for (const TSharedPtr<FJsonValue>& PropertyDescriptor : Properties)
     {
-        // Expose reconstructed class properties to the editor/Blueprints, but do not
-        // make retail runtime-only fields look persistently editable. Suzie used to
-        // force CPF_Edit onto every property, including CPF_Transient /
-        // CPF_SkipSerialization fields. That lets users change values in Details even
-        // though SavePackage is required to discard them on reload.
-        //
-        // Respect retail editability for non-persistent fields. If the retail property
-        // was not editable, keep it visible in Details as read-only. For serializable
-        // fields, preserve the modkit-friendly behaviour of making them editable.
         const TSharedPtr<FJsonObject> PropertyObject = PropertyDescriptor->AsObject();
-        const TSet<FString> RetailPropertyFlags = ParseFlags(PropertyObject->GetStringField(TEXT("flags")));
-        const bool bRetailEditable = RetailPropertyFlags.Contains(TEXT("CPF_Edit"));
-        const bool bNonPersistentProperty =
-            RetailPropertyFlags.Contains(TEXT("CPF_Transient"))
-            || RetailPropertyFlags.Contains(TEXT("CPF_DuplicateTransient"))
-            || RetailPropertyFlags.Contains(TEXT("CPF_NonPIEDuplicateTransient"))
-            || RetailPropertyFlags.Contains(TEXT("CPF_TextExportTransient"))
-            || RetailPropertyFlags.Contains(TEXT("CPF_SkipSerialization"));
-
-        EPropertyFlags ExtraPropertyFlags = CPF_BlueprintVisible;
-        if (!bNonPersistentProperty || bRetailEditable)
-        {
-            ExtraPropertyFlags |= CPF_Edit;
-        }
-        else
-        {
-            // VisibleAnywhere-style behaviour for runtime/cache fields that Suzie
-            // previously exposed as writable. Their values can still be inspected,
-            // but the editor no longer implies that changing them will survive save.
-            ExtraPropertyFlags |= CPF_Edit | CPF_EditConst;
-        }
-
-        if (FProperty* CreatedProperty = AddPropertyToStruct(Context, NewClass, PropertyObject, ExtraPropertyFlags))
+        if (FProperty* CreatedProperty = AddPropertyToStruct(Context, NewClass, PropertyObject, CPF_None))
         {
             // Build a normal safe Unreal layout first. After the whole class has
             // linked, TryApplyJmapStructLayout may replace these offsets atomically
@@ -1463,6 +2973,16 @@ UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Co
     // Bind parent class to this class and link properties to calculate their runtime derived data
     NewClass->Bind();
     NewClass->StaticLink();
+
+    if (!ApplyRetailSerializationPropertyLinkAtConstruction(NewClass, ClassDefinition))
+    {
+        UE_LOG(
+            LogSuzie,
+            Warning,
+            TEXT("Dynamic class %s could not reproduce the retail serialization ABI"),
+            *ClassPath);
+    }
+
     TryApplyJmapStructLayout(NewClass, ClassDefinition);
     NewClass->SetSparseClassDataStruct(NewClass->GetSparseClassDataArchetypeStruct());
 
@@ -1578,19 +3098,11 @@ UScriptStruct* FSuziePluginModule::FindOrCreateScriptStruct(FDynamicClassGenerat
         }
     }
 
-    // Initialize properties for the struct
+    // Initialize properties for the struct using the exact retail flags.
     TArray<TSharedPtr<FJsonValue>> Properties = StructDefinition->GetArrayField(TEXT("properties"));
     for (const TSharedPtr<FJsonValue>& PropertyDescriptor : Properties)
     {
-        // Make Struct only exposes members that are BlueprintVisible and not
-        // BlueprintReadOnly. Recreate the writable editor-facing behaviour provided
-        // by the old UHT compatibility headers.
-        const EPropertyFlags ExtraPropertyFlags = CPF_Edit | CPF_BlueprintVisible;
-        if (FProperty* CreatedProperty = AddPropertyToStruct(Context, NewStruct, PropertyDescriptor->AsObject(), ExtraPropertyFlags))
-        {
-            CreatedProperty->ClearPropertyFlags(CPF_BlueprintReadOnly | CPF_EditConst);
-            CreatedProperty->SetPropertyFlags(CPF_Edit | CPF_BlueprintVisible);
-        }
+        AddPropertyToStruct(Context, NewStruct, PropertyDescriptor->AsObject(), CPF_None);
     }
     
     // Mark all dynamic script structs as blueprint types
@@ -1604,6 +3116,16 @@ UScriptStruct* FSuziePluginModule::FindOrCreateScriptStruct(FDynamicClassGenerat
     NewStruct->Bind();
     NewStruct->PrepareCppStructOps();
     NewStruct->StaticLink(true);
+
+    if (!ApplyRetailSerializationPropertyLinkAtConstruction(NewStruct, StructDefinition))
+    {
+        UE_LOG(
+            LogSuzie,
+            Warning,
+            TEXT("Dynamic script struct %s could not reproduce the retail serialization ABI"),
+            *StructPath);
+    }
+
     TryApplyJmapStructLayout(NewStruct, StructDefinition);
 
     // The engine does not gracefully handle empty structs, so force the struct size to be at least one byte
@@ -1720,13 +3242,23 @@ UEnum* FSuziePluginModule::FindOrCreateEnum(FDynamicClassGenerationContext& Cont
         }
     }
 
-    // TODO: CppForm and Flags are not currently dumped, but we can assume flags None for most enums and guess CppForm based on names and CppType
+    // Reconstruct CppForm from the dumped naming convention and preserve the enum
+    // Flags bit when the retail jmap identifies this as a bitflags enum.
     const bool bCppTypeIsNamespaced = NewEnum->CppType.Contains(TEXT("::"));
-    const UEnum::ECppForm EnumCppForm = bContainsFullyQualifiedNames ? (bCppTypeIsNamespaced ? UEnum::ECppForm::Namespaced : UEnum::ECppForm::EnumClass) : UEnum::ECppForm::Regular;
-    const EEnumFlags EnumFlags = EEnumFlags::None;
+    const UEnum::ECppForm EnumCppForm = bContainsFullyQualifiedNames
+        ? (bCppTypeIsNamespaced ? UEnum::ECppForm::Namespaced : UEnum::ECppForm::EnumClass)
+        : UEnum::ECppForm::Regular;
+
+    EEnumFlags EnumFlags = EEnumFlags::None;
+    if (EnumDefinition->HasTypedField<EJson::String>(TEXT("enum_flags"))
+        && EnumDefinition->GetStringField(TEXT("enum_flags")).Contains(TEXT("Flags")))
+    {
+        EnumFlags = EEnumFlags::Flags;
+    }
 
     // We do not need to generate _MAX key because it will always be present in the enum definition
     NewEnum->SetEnums(EnumNames, EnumCppForm, EnumFlags, false);
+    NewEnum->SetMetaData(TEXT("SuzieDynamicEnum"), TEXT("true"));
 
     // Mark all dynamic enums as blueprint types
     NewEnum->SetMetaData(*FBlueprintMetadata::MD_AllowableBlueprintVariableType.ToString(), TEXT("true"));
@@ -2052,13 +3584,16 @@ FProperty* FSuziePluginModule::BuildProperty(FDynamicClassGenerationContext& Con
         {TEXT("CPF_Net"), CPF_Net},
         {TEXT("CPF_EditFixedSize"), CPF_EditFixedSize},
         {TEXT("CPF_Parm"), CPF_Parm},
+        {TEXT("CPF_ZeroConstructor"), CPF_ZeroConstructor},
         {TEXT("CPF_OutParm"), CPF_OutParm},
         {TEXT("CPF_ReturnParm"), CPF_ReturnParm},
         {TEXT("CPF_DisableEditOnTemplate"), CPF_DisableEditOnTemplate},
         {TEXT("CPF_NonNullable"), CPF_NonNullable},
         {TEXT("CPF_Transient"), CPF_Transient},
+        {TEXT("CPF_Config"), CPF_Config},
         {TEXT("CPF_DisableEditOnInstance"), CPF_DisableEditOnInstance},
         {TEXT("CPF_EditConst"), CPF_EditConst},
+        {TEXT("CPF_GlobalConfig"), CPF_GlobalConfig},
         {TEXT("CPF_DisableEditOnInstance"), CPF_DisableEditOnInstance},
         {TEXT("CPF_InstancedReference"), CPF_InstancedReference},
         {TEXT("CPF_DuplicateTransient"), CPF_DuplicateTransient},
@@ -2068,12 +3603,14 @@ FProperty* FSuziePluginModule::BuildProperty(FDynamicClassGenerationContext& Con
         {TEXT("CPF_ReferenceParm"), CPF_ReferenceParm},
         {TEXT("CPF_BlueprintAssignable"), CPF_BlueprintAssignable},
         {TEXT("CPF_Deprecated"), CPF_Deprecated},
+        {TEXT("CPF_IsPlainOldData"), CPF_IsPlainOldData},
         {TEXT("CPF_RepSkip"), CPF_RepSkip},
         {TEXT("CPF_Deprecated"), CPF_Deprecated},
         {TEXT("CPF_RepNotify"), CPF_RepNotify},
         {TEXT("CPF_Interp"), CPF_Interp},
         {TEXT("CPF_NonTransactional"), CPF_NonTransactional},
         {TEXT("CPF_EditorOnly"), CPF_EditorOnly},
+        {TEXT("CPF_NoDestructor"), CPF_NoDestructor},
         {TEXT("CPF_AutoWeak"), CPF_AutoWeak},
         // CPF_ContainsInstancedReference is actually computed, but it is set by the compiler and not in runtime,
         // so we need to either carry it over (like we do here), or manually set it on container properties when their
@@ -2087,6 +3624,7 @@ FProperty* FSuziePluginModule::BuildProperty(FDynamicClassGenerationContext& Con
         {TEXT("CPF_BlueprintAuthorityOnly"), CPF_BlueprintAuthorityOnly},
         {TEXT("CPF_TextExportTransient"), CPF_TextExportTransient},
         {TEXT("CPF_NonPIEDuplicateTransient"), CPF_NonPIEDuplicateTransient},
+        {TEXT("CPF_ExposeOnSpawn"), CPF_ExposeOnSpawn},
         {TEXT("CPF_PersistentInstance"), CPF_PersistentInstance},
         {TEXT("CPF_UObjectWrapper"), CPF_UObjectWrapper},
         {TEXT("CPF_NativeAccessSpecifierPublic"), CPF_NativeAccessSpecifierPublic},
@@ -2114,6 +3652,28 @@ FProperty* FSuziePluginModule::BuildProperty(FDynamicClassGenerationContext& Con
         {
             PropertyFlags |= PropertyFlagBit;
         }
+    }
+
+    // Preserve numeric flags emitted by jmap for bits this engine branch does not
+    // have a symbolic name for.
+    for (const FString& PropertyFlagName : PropertyFlagNames)
+    {
+        if (PropertyFlagName.StartsWith(TEXT("0x")))
+        {
+            PropertyFlags |= static_cast<EPropertyFlags>(FCString::Strtoui64(*PropertyFlagName, nullptr, 16));
+        }
+    }
+
+    // These names are present in the PAYDAY 3 UE5.5 jmap but the original
+    // cross-version Suzie table gated their symbolic constants to newer branches.
+    // Preserve the UE5 bit values without making this source depend on those symbols.
+    if (PropertyFlagNames.Contains(TEXT("CPF_RequiredParm")))
+    {
+        PropertyFlags |= static_cast<EPropertyFlags>(0x0000000000008000ull);
+    }
+    if (PropertyFlagNames.Contains(TEXT("CPF_TObjectPtr")))
+    {
+        PropertyFlags |= static_cast<EPropertyFlags>(0x0100000000000000ull);
     }
 
     const FString PropertyName = PropertyJson->GetStringField(TEXT("name"));
@@ -2160,74 +3720,130 @@ FProperty* FSuziePluginModule::BuildProperty(FDynamicClassGenerationContext& Con
 
     if (FObjectPropertyBase* ObjectPropertyBase = CastField<FObjectPropertyBase>(NewProperty))
     {
-        UClass* PropertyClass = FindOrCreateUnregisteredClass(Context, *PropertyJson->GetStringField(TEXT("property_class")));
-        // Fall back to UObject class if property class could not be found
-        ObjectPropertyBase->PropertyClass = PropertyClass ? PropertyClass : UObject::StaticClass();
-        
-        // Class properties additionally define MetaClass value
+        const FString PropertyClassPath = PropertyJson->GetStringField(TEXT("property_class"));
+        UClass* PropertyClass = FindOrCreateUnregisteredClass(Context, PropertyClassPath);
+        if (PropertyClass == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("property_class"), PropertyClassPath);
+            return nullptr;
+        }
+        ObjectPropertyBase->PropertyClass = PropertyClass;
+
         if (FClassProperty* ClassProperty = CastField<FClassProperty>(NewProperty))
         {
-            UClass* MetaClass = FindOrCreateUnregisteredClass(Context, *PropertyJson->GetStringField(TEXT("meta_class")));
-            // Fall back to UObject meta-class if meta-class could not be found
-            ClassProperty->MetaClass = MetaClass ? MetaClass : UObject::StaticClass();
+            const FString MetaClassPath = PropertyJson->GetStringField(TEXT("meta_class"));
+            UClass* MetaClass = FindOrCreateUnregisteredClass(Context, MetaClassPath);
+            if (MetaClass == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("meta_class"), MetaClassPath);
+                return nullptr;
+            }
+            ClassProperty->MetaClass = MetaClass;
         }
         else if (FSoftClassProperty* SoftClassProperty = CastField<FSoftClassProperty>(NewProperty))
         {
-            UClass* MetaClass = FindOrCreateUnregisteredClass(Context, *PropertyJson->GetStringField(TEXT("meta_class")));
-            // Fall back to UObject meta-class if meta-class could not be found
-            SoftClassProperty->MetaClass = MetaClass ? MetaClass : UObject::StaticClass();
+            const FString MetaClassPath = PropertyJson->GetStringField(TEXT("meta_class"));
+            UClass* MetaClass = FindOrCreateUnregisteredClass(Context, MetaClassPath);
+            if (MetaClass == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("meta_class"), MetaClassPath);
+                return nullptr;
+            }
+            SoftClassProperty->MetaClass = MetaClass;
         }
     }
     else if (FInterfaceProperty* InterfaceProperty = CastField<FInterfaceProperty>(NewProperty))
     {
-        UClass* InterfaceClass = FindOrCreateUnregisteredClass(Context, *PropertyJson->GetStringField(TEXT("interface_class")));
-        // Fall back to UInterface if interface class could not be found
-        InterfaceProperty->InterfaceClass = InterfaceClass ? InterfaceClass : UInterface::StaticClass();
+        const FString InterfaceClassPath = PropertyJson->GetStringField(TEXT("interface_class"));
+        UClass* InterfaceClass = FindOrCreateUnregisteredClass(Context, InterfaceClassPath);
+        if (InterfaceClass == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("interface_class"), InterfaceClassPath);
+            return nullptr;
+        }
+        InterfaceProperty->InterfaceClass = InterfaceClass;
     }
     else if (FStructProperty* StructProperty = CastField<FStructProperty>(NewProperty))
     {
-        UScriptStruct* Struct = FindOrCreateScriptStruct(Context, PropertyJson->GetStringField(TEXT("struct")));
-        // Fall back to FVector if struct class could not be found
-        StructProperty->Struct = Struct ? Struct : TBaseStructure<FVector>::Get();
+        const FString StructPath = PropertyJson->GetStringField(TEXT("struct"));
+        UScriptStruct* Struct = FindOrCreateScriptStruct(Context, StructPath);
+        if (Struct == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("struct"), StructPath);
+            return nullptr;
+        }
+        StructProperty->Struct = Struct;
     }
     else if (FEnumProperty* EnumProperty = CastField<FEnumProperty>(NewProperty))
     {
-        UEnum* Enum = FindOrCreateEnum(Context, PropertyJson->GetStringField(TEXT("enum")));
-        // Fall back to EMovementMode if enum class could not be found
-        EnumProperty->SetEnum(Enum ? Enum : StaticEnum<EMovementMode>());
+        const FString EnumPath = PropertyJson->GetStringField(TEXT("enum"));
+        UEnum* Enum = FindOrCreateEnum(Context, EnumPath);
+        if (Enum == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("enum"), EnumPath);
+            return nullptr;
+        }
+        EnumProperty->SetEnum(Enum);
 
         FProperty* UnderlyingProp = BuildProperty(Context, EnumProperty, PropertyJson->GetObjectField(TEXT("container")));
+        if (UnderlyingProp == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("enum_container"), EnumPath);
+            return nullptr;
+        }
         EnumProperty->AddCppProperty(UnderlyingProp);
     }
     else if (FByteProperty* ByteProperty = CastField<FByteProperty>(NewProperty))
     {
-        // Not all byte properties are enumerations so this field might not be set or be null
         if (PropertyJson->HasTypedField<EJson::String>(TEXT("enum")))
         {
-            UEnum* Enum = FindOrCreateEnum(Context, PropertyJson->GetStringField(TEXT("enum")));
-            // Fall back to EMovementMode if enum class could not be found
-            ByteProperty->Enum = Enum ? Enum : StaticEnum<EMovementMode>();
+            const FString EnumPath = PropertyJson->GetStringField(TEXT("enum"));
+            UEnum* Enum = FindOrCreateEnum(Context, EnumPath);
+            if (Enum == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("byte_enum"), EnumPath);
+                return nullptr;
+            }
+            ByteProperty->Enum = Enum;
         }
     }
     else if (FDelegateProperty* DelegateProperty = CastField<FDelegateProperty>(NewProperty))
     {
-        UFunction* SignatureFunction = FindOrCreateFunction(Context, PropertyJson->GetStringField(TEXT("signature_function")));
-        // Fall back to FOnTimelineEvent delegate signature in the engine if real delegate signature could not be found
-        DelegateProperty->SignatureFunction = SignatureFunction ? SignatureFunction : FindObject<UFunction>(nullptr, TEXT("/Script/Engine.OnTimelineEvent__DelegateSignature"));
+        const FString SignaturePath = PropertyJson->GetStringField(TEXT("signature_function"));
+        UFunction* SignatureFunction = FindOrCreateFunction(Context, SignaturePath);
+        if (SignatureFunction == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("delegate_signature"), SignaturePath);
+            return nullptr;
+        }
+        DelegateProperty->SignatureFunction = SignatureFunction;
     }
     else if (FMulticastDelegateProperty* MulticastDelegateProperty = CastField<FMulticastDelegateProperty>(NewProperty))
     {
-        UFunction* SignatureFunction = FindOrCreateFunction(Context, PropertyJson->GetStringField(TEXT("signature_function")));
-        // Fall back to FOnTimelineEvent delegate signature in the engine if real delegate signature could not be found
-        MulticastDelegateProperty->SignatureFunction = SignatureFunction ? SignatureFunction : FindObject<UFunction>(nullptr, TEXT("/Script/Engine.OnTimelineEvent__DelegateSignature"));
+        const FString SignaturePath = PropertyJson->GetStringField(TEXT("signature_function"));
+        UFunction* SignatureFunction = FindOrCreateFunction(Context, SignaturePath);
+        if (SignatureFunction == nullptr)
+        {
+            NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("multicast_delegate_signature"), SignaturePath);
+            return nullptr;
+        }
+        MulticastDelegateProperty->SignatureFunction = SignatureFunction;
     }
     else if (FFieldPathProperty* FieldPathProperty = CastField<FFieldPathProperty>(NewProperty))
     {
         if (PropertyJson->HasTypedField<EJson::String>(TEXT("property_class")))
         {
-            FFieldClass* const* PropertyClassPtr = FFieldClass::GetNameToFieldClassMap().Find(TEXT("property_class"));
-            // Fall back to FProperty if property class could not be found
-            FieldPathProperty->PropertyClass = PropertyClassPtr ? *PropertyClassPtr : FProperty::StaticClass();   
+            const FString PropertyClassName = PropertyJson->GetStringField(TEXT("property_class"));
+            FFieldClass* const* PropertyClassPtr =
+                FFieldClass::GetNameToFieldClassMap().Find(FName(*PropertyClassName));
+
+            if (PropertyClassPtr == nullptr || *PropertyClassPtr == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("field_class"), PropertyClassName);
+                return nullptr;
+            }
+
+            FieldPathProperty->PropertyClass = *PropertyClassPtr;
         }
     }
     else
@@ -2236,25 +3852,45 @@ FProperty* FSuziePluginModule::BuildProperty(FDynamicClassGenerationContext& Con
         if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(NewProperty))
         {
             FProperty* Inner = BuildProperty(Context, NewProperty, PropertyJson->GetObjectField(TEXT("inner")));
+            if (Inner == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("array_inner"), TEXT("<see previous error>"));
+                return nullptr;
+            }
             ArrayProperty->AddCppProperty(Inner);
         }
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
         else if (FOptionalProperty* OptionalProperty = CastField<FOptionalProperty>(NewProperty))
         {
             FProperty* ValueProperty = BuildProperty(Context, NewProperty, PropertyJson->GetObjectField(TEXT("inner")));
+            if (ValueProperty == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("optional_inner"), TEXT("<see previous error>"));
+                return nullptr;
+            }
             OptionalProperty->AddCppProperty(ValueProperty);
         }
 #endif
         else if (FSetProperty* SetProperty = CastField<FSetProperty>(NewProperty))
         {
             FProperty* KeyProp = BuildProperty(Context, NewProperty, PropertyJson->GetObjectField(TEXT("key_prop")));
+            if (KeyProp == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("set_element"), TEXT("<see previous error>"));
+                return nullptr;
+            }
             SetProperty->AddCppProperty(KeyProp);
         }
         else if (FMapProperty* MapProperty = CastField<FMapProperty>(NewProperty))
         {
             FProperty* KeyProp = BuildProperty(Context, NewProperty, PropertyJson->GetObjectField(TEXT("key_prop")));
             FProperty* ValueProp = BuildProperty(Context, NewProperty, PropertyJson->GetObjectField(TEXT("value_prop")));
-        
+            if (KeyProp == nullptr || ValueProp == nullptr)
+            {
+                NoteUnresolvedSuzieRetailReference(PropertyName, TEXT("map_key_or_value"), TEXT("<see previous error>"));
+                return nullptr;
+            }
+
             MapProperty->AddCppProperty(KeyProp);
             MapProperty->AddCppProperty(ValueProp);
         }
