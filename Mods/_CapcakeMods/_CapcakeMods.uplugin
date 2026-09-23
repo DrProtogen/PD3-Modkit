@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "_CapcakeMods",
+	"Description": "Migrated from a legacy UE4 ModLoader mod by CrimeForge.",
+	"Category": "Mods",
+	"CreatedBy": "",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EnabledByDefault": true,
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Plugins": [
+		{
+			"Name": "PDML",
+			"Enabled": true,
+			"SemVersion": "0.11.0"
+		}
+	],
+	"SemVersion": "1.0.0"
+}
