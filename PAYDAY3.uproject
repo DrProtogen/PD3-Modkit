@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "{917E5546-448C-B937-C6D0-40BCFBC14C43}",
+	"EngineAssociation": "{E701B8D7-4359-7111-A345-20B7B4F86A11}",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -21,6 +21,11 @@
                 {
                         "Name": "Suzie",
                         "Enabled": true
+                },
+                {
+                        "Name": "BinkMedia",
+                        "Enabled": true
                 }
+
 	]
 }

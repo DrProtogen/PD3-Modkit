@@ -14,35 +14,7 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 #endif
 #define CRIMEFORGE_CrimeForgeSettings_generated_h
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_20_GENERATED_BODY \
-	friend struct Z_Construct_UScriptStruct_FRAnimationBlueprintSettings_Statics; \
-	static class UScriptStruct* StaticStruct();
-
-
-template<> CRIMEFORGE_API UScriptStruct* StaticStruct<struct FRAnimationBlueprintSettings>();
-
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_29_GENERATED_BODY \
-	friend struct Z_Construct_UScriptStruct_FRTextureSettings_Statics; \
-	static class UScriptStruct* StaticStruct();
-
-
-template<> CRIMEFORGE_API UScriptStruct* StaticStruct<struct FRTextureSettings>();
-
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_38_GENERATED_BODY \
-	friend struct Z_Construct_UScriptStruct_FRMaterialSettings_Statics; \
-	static class UScriptStruct* StaticStruct();
-
-
-template<> CRIMEFORGE_API UScriptStruct* StaticStruct<struct FRMaterialSettings>();
-
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_47_GENERATED_BODY \
-	friend struct Z_Construct_UScriptStruct_FRSettings_Statics; \
-	static class UScriptStruct* StaticStruct();
-
-
-template<> CRIMEFORGE_API UScriptStruct* StaticStruct<struct FRSettings>();
-
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_78_INCLASS_NO_PURE_DECLS \
+#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_INCLASS_NO_PURE_DECLS \
 private: \
 	static void StaticRegisterNativesUCrimeForgeSettings(); \
 	friend struct Z_Construct_UClass_UCrimeForgeSettings_Statics; \
@@ -53,7 +25,7 @@ public: \
 
 
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_78_ENHANCED_CONSTRUCTORS \
+#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_ENHANCED_CONSTRUCTORS \
 	/** Standard constructor, called after all reflected properties have been initialized */ \
 	NO_API UCrimeForgeSettings(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get()); \
 private: \
@@ -67,12 +39,12 @@ public: \
 	NO_API virtual ~UCrimeForgeSettings();
 
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_75_PROLOG
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_78_GENERATED_BODY \
+#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_21_PROLOG
+#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_GENERATED_BODY \
 PRAGMA_DISABLE_DEPRECATION_WARNINGS \
 public: \
-	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_78_INCLASS_NO_PURE_DECLS \
-	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_78_ENHANCED_CONSTRUCTORS \
+	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_INCLASS_NO_PURE_DECLS \
+	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_ENHANCED_CONSTRUCTORS \
 private: \
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 

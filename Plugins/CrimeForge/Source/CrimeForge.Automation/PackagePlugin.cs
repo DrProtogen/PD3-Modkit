@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -33,6 +33,14 @@ namespace CrimeForge.Automation
 			new List<string>();
 		public List<string> ExpectedChunkPackages { get; } =
 			new List<string>();
+		public List<CrimeForgeAdditionalPakFile> AdditionalPakFiles { get; } =
+			new List<CrimeForgeAdditionalPakFile>();
+	}
+
+	internal sealed class CrimeForgeAdditionalPakFile
+	{
+		public string Source { get; set; } = "";
+		public string StagedPath { get; set; } = "";
 	}
 
 	/// <summary>
@@ -223,10 +231,203 @@ namespace CrimeForge.Automation
 
 	public class PackagePlugin : BuildCommand
 	{
-		private const string GameExecutableName = "PAYDAY3.exe";
+		private const string DesktopGameExecutableName = "PAYDAY3.exe";
+		private const string WinGDKGameExecutableName = "PAYDAY3-WinGDK-Shipping.exe";
+		private const string WinGDKClientExecutableName = "PAYDAY3Client-WinGDK-Shipping.exe";
 		private const string SteamAppId = "1272080";
 		private const string ModDeployRoot = "Mods";
 		private const string DefaultBaseReleaseVersion = "SOMERELEASE1";
+
+		private sealed class PD3GameLayout
+		{
+			public string InstallDirectory;
+			public string GameContentDirectory;
+			public string ExecutablePath;
+			public string PaksDirectory;
+			public string ModsDirectory;
+			public bool IsMicrosoftStore;
+		}
+
+		private static PD3GameLayout TryCreateGameLayout(
+			string installDirectory,
+			string gameContentDirectory,
+			string executablePath,
+			bool isMicrosoftStore)
+		{
+			if (string.IsNullOrWhiteSpace(installDirectory) ||
+			    string.IsNullOrWhiteSpace(gameContentDirectory) ||
+			    string.IsNullOrWhiteSpace(executablePath))
+			{
+				return null;
+			}
+
+			var paksDirectory = Path.Combine(
+				gameContentDirectory,
+				"Content",
+				"Paks");
+
+			if (!Directory.Exists(installDirectory) ||
+			    !Directory.Exists(gameContentDirectory) ||
+			    !File.Exists(executablePath) ||
+			    !Directory.Exists(paksDirectory))
+			{
+				return null;
+			}
+
+			return new PD3GameLayout
+			{
+				InstallDirectory = Path.GetFullPath(installDirectory),
+				GameContentDirectory = Path.GetFullPath(gameContentDirectory),
+				ExecutablePath = Path.GetFullPath(executablePath),
+				PaksDirectory = Path.GetFullPath(paksDirectory),
+				ModsDirectory = Path.GetFullPath(
+					Path.Combine(gameContentDirectory, ModDeployRoot)),
+				IsMicrosoftStore = isMicrosoftStore
+			};
+		}
+
+		private static PD3GameLayout TryCreateWinGDKGameLayout(
+			string installDirectory,
+			string gameContentDirectory)
+		{
+			var winGDKDirectory = Path.Combine(
+				gameContentDirectory,
+				"Binaries",
+				"WinGDK");
+
+			foreach (var executableName in new[]
+			         {
+				         WinGDKGameExecutableName,
+				         WinGDKClientExecutableName
+			         })
+			{
+				var layout = TryCreateGameLayout(
+					installDirectory,
+					gameContentDirectory,
+					Path.Combine(winGDKDirectory, executableName),
+					true);
+
+				if (layout != null)
+				{
+					return layout;
+				}
+			}
+
+			return null;
+		}
+
+		private static PD3GameLayout ResolvePAYDAY3GameLayout(
+			string gameDirectory)
+		{
+			if (string.IsNullOrWhiteSpace(gameDirectory))
+			{
+				return null;
+			}
+
+			try
+			{
+				var inputDirectory = Path.GetFullPath(
+					gameDirectory.Trim().Trim('"'));
+
+				if (!Directory.Exists(inputDirectory))
+				{
+					return null;
+				}
+
+				// Steam / Epic install root.
+				var layout = TryCreateGameLayout(
+					inputDirectory,
+					Path.Combine(inputDirectory, "PAYDAY3"),
+					Path.Combine(inputDirectory, DesktopGameExecutableName),
+					false);
+
+				if (layout != null)
+				{
+					return layout;
+				}
+
+				// Also accept the desktop PAYDAY3 content root itself.
+				var parentDirectory = Directory.GetParent(inputDirectory)?.FullName;
+				if (!string.IsNullOrWhiteSpace(parentDirectory))
+				{
+					layout = TryCreateGameLayout(
+						parentDirectory,
+						inputDirectory,
+						Path.Combine(parentDirectory, DesktopGameExecutableName),
+						false);
+
+					if (layout != null)
+					{
+						return layout;
+					}
+				}
+
+				// Microsoft Store / Xbox install root.
+				layout = TryCreateWinGDKGameLayout(
+					inputDirectory,
+					Path.Combine(inputDirectory, "Content", "PAYDAY3"));
+
+				if (layout != null)
+				{
+					return layout;
+				}
+
+				// Also accept <Root>/Content/PAYDAY3 directly.
+				var contentParent = Directory.GetParent(inputDirectory)?.Parent?.FullName;
+				if (!string.IsNullOrWhiteSpace(contentParent))
+				{
+					layout = TryCreateWinGDKGameLayout(
+						contentParent,
+						inputDirectory);
+
+					if (layout != null)
+					{
+						return layout;
+					}
+				}
+
+				// And accept <Root>/Content/PAYDAY3/Binaries/WinGDK.
+				if (string.Equals(
+						Path.GetFileName(inputDirectory),
+						"WinGDK",
+						StringComparison.OrdinalIgnoreCase))
+				{
+					var gameContentDirectory = Path.GetFullPath(
+						Path.Combine(inputDirectory, "..", ".."));
+					var installDirectory = Path.GetFullPath(
+						Path.Combine(gameContentDirectory, "..", ".."));
+
+					layout = TryCreateWinGDKGameLayout(
+						installDirectory,
+						gameContentDirectory);
+
+					if (layout != null)
+					{
+						return layout;
+					}
+				}
+			}
+			catch (Exception)
+			{
+				return null;
+			}
+
+			return null;
+		}
+
+		private static PD3GameLayout RequirePAYDAY3GameLayout(
+			string gameDirectory)
+		{
+			var layout = ResolvePAYDAY3GameLayout(gameDirectory);
+			if (layout != null)
+			{
+				return layout;
+			}
+
+			throw new AutomationException(
+				"Provided -GameDir is invalid. Expected either a Steam/Epic PAYDAY3.exe install or a Microsoft Store/Xbox install containing Content\\PAYDAY3\\Binaries\\WinGDK\\PAYDAY3-WinGDK-Shipping.exe. Provided: '{0}'",
+				gameDirectory ?? "");
+		}
 
 		private static string NormalizeLaunchGameType(
 			string launchGameType)
@@ -435,25 +636,16 @@ namespace CrimeForge.Automation
 		private static void LaunchDirectPAYDAY3Executable(
 			string gameDirectory)
 		{
-			var executable =
-				Path.Combine(
-					gameDirectory ?? "",
-					GameExecutableName
-				);
-
-			if (!File.Exists(executable))
-			{
-				throw new AutomationException(
-					"Unable to launch PAYDAY 3 directly. Expected '{0}'.",
-					executable
-				);
-			}
+			var layout = RequirePAYDAY3GameLayout(gameDirectory);
+			var workingDirectory =
+				Path.GetDirectoryName(layout.ExecutablePath) ??
+				layout.InstallDirectory;
 
 			Process.Start(
-				new ProcessStartInfo(executable)
+				new ProcessStartInfo(layout.ExecutablePath)
 				{
 					UseShellExecute = true,
-					WorkingDirectory = gameDirectory
+					WorkingDirectory = workingDirectory
 				}
 			);
 		}
@@ -500,7 +692,7 @@ namespace CrimeForge.Automation
 				}
 
 				LogWarning(
-					"PAYDAY 3 was not found in Epic's installed-game manifests. Falling back to GameDir/PAYDAY3.exe."
+					"PAYDAY 3 was not found in Epic's installed-game manifests. Falling back to the executable resolved from GameDir."
 				);
 
 				LaunchDirectPAYDAY3Executable(
@@ -533,7 +725,7 @@ namespace CrimeForge.Automation
 				}
 
 				LogWarning(
-					"PAYDAY 3 Microsoft Store/Xbox AUMID could not be detected. Falling back to GameDir/PAYDAY3.exe."
+					"PAYDAY 3 Microsoft Store/Xbox AUMID could not be detected. Falling back to the WinGDK executable resolved from GameDir."
 				);
 
 				LaunchDirectPAYDAY3Executable(
@@ -585,13 +777,11 @@ namespace CrimeForge.Automation
 			string pluginName,
 			string pluginDirectory)
 		{
-			// PAYDAY 3 runtime layout:
-			// <GameDir>/PAYDAY3/Mods/<PluginName>
-			var modsDir = Path.Combine(
-				gameDir,
-				projectFile.GetFileNameWithoutAnyExtensions(),
-				ModDeployRoot
-			);
+			// Resolve the runtime Mods directory for either:
+			//   Steam/Epic:       <Root>/PAYDAY3/Mods
+			//   Microsoft Store:  <Root>/Content/PAYDAY3/Mods
+			var layout = RequirePAYDAY3GameLayout(gameDir);
+			var modsDir = layout.ModsDirectory;
 			var resultPluginDirectory = Path.Combine(modsDir, pluginName);
 
 			if (DirectoryExists(resultPluginDirectory))
@@ -801,6 +991,36 @@ namespace CrimeForge.Automation
 					root,
 					"ExpectedChunkPackages"));
 
+			SystemJsonArray additionalPakFiles =
+				root["AdditionalPakFiles"] as SystemJsonArray;
+			if (additionalPakFiles != null)
+			{
+				foreach (SystemJsonNode node in additionalPakFiles)
+				{
+					SystemJsonObject file = node as SystemJsonObject;
+					if (file == null)
+					{
+						continue;
+					}
+
+					string source =
+						file["Source"]?.GetValue<string>() ?? "";
+					string stagedPath =
+						file["StagedPath"]?.GetValue<string>() ?? "";
+
+					if (!string.IsNullOrWhiteSpace(source) &&
+						!string.IsNullOrWhiteSpace(stagedPath))
+					{
+						result.AdditionalPakFiles.Add(
+							new CrimeForgeAdditionalPakFile
+							{
+								Source = source,
+								StagedPath = stagedPath
+							});
+					}
+				}
+			}
+
 			if (!result.PluginName.Equals(
 					pluginName,
 					StringComparison.OrdinalIgnoreCase))
@@ -903,6 +1123,13 @@ namespace CrimeForge.Automation
 			 *
 			 * CookCommandlet accepts package names through -Map even when they are
 			 * not UWorld assets, so seed the full deterministic PAL package set.
+			 */
+			/*
+			 * Do not add -CookSinglePackage here. Wwise recognizes that flag and
+			 * starts its resource cooker, but UE then expands this surgical cook into
+			 * hundreds of startup/engine packages. CrimeForge packages the already
+			 * generated BNK/WEM files itself, so PASS 2 only needs the exact AkEvent
+			 * UObject plus the rest of the deterministic PAL package set.
 			 */
 			return " -cooksinglepackagenorefs -Map=" +
 				string.Join(
@@ -1387,7 +1614,12 @@ namespace CrimeForge.Automation
 				"-AllowUncookedAssetReferences "
 				+ "-ini:Editor:[CookSettings]:CookContentMissingSeverity=Warning "
 				+ "-ini:Engine:[Core.Log]:LogAkAudio=Fatal "
-				+ "-ini:Engine:[Core.Log]:LogAudiokineticTools=Fatal"
+				+ "-ini:Engine:[Core.Log]:LogAudiokineticTools=Fatal "
+				// PASS 2 deliberately does not start Wwise's platform resource cooker.
+				// Its generated BNK/WEM payload is staged into PASS 1 by CrimeForge.
+				// Wwise 2023.1 otherwise logs GetCookerForPlatform as Error while the
+				// AkAudioEvent package itself still completes its normal UE cook.
+				+ "-ini:Engine:[Core.Log]:LogWwiseResourceCooker=Fatal"
 				+ BuildExactPass2CookOptions(palManifest);
 
 			LogInformation(
@@ -1560,9 +1792,68 @@ namespace CrimeForge.Automation
 			}
 		}
 
-		public static void CopyBuildToStagingDirectory(
+		private static void StageAdditionalPakFiles(
+			DeploymentContext deploymentContext,
+			IEnumerable<CrimeForgeAdditionalPakFile> files)
+		{
+			if (files == null)
+			{
+				return;
+			}
+
+			var stagedPaths = new HashSet<string>(
+				StringComparer.OrdinalIgnoreCase);
+
+			foreach (CrimeForgeAdditionalPakFile file in files)
+			{
+				if (file == null ||
+					string.IsNullOrWhiteSpace(file.Source) ||
+					string.IsNullOrWhiteSpace(file.StagedPath))
+				{
+					continue;
+				}
+
+				string source = Path.GetFullPath(file.Source);
+				string stagedPath = file.StagedPath
+					.Replace('\\', '/')
+					.TrimStart('/');
+
+				if (Path.IsPathRooted(stagedPath) ||
+					stagedPath.Split('/').Any(part => part == ".."))
+				{
+					throw new AutomationException(
+						"CrimeForge refused invalid additional pak path: {0}",
+						file.StagedPath);
+				}
+
+				if (!FileExists(source))
+				{
+					throw new AutomationException(
+						"Wwise resource selected for packaging no longer exists: {0}",
+						source);
+				}
+
+				if (!stagedPaths.Add(stagedPath))
+				{
+					continue;
+				}
+
+				deploymentContext.StageFile(
+					StagedFileType.UFS,
+					new FileReference(source),
+					new StagedFileReference(stagedPath));
+
+				LogInformation(
+					"Wwise: staging into main mod pak: {0} -> {1}",
+					source,
+					stagedPath);
+			}
+		}
+
+		internal static void CopyBuildToStagingDirectory(
 			ProjectParams Params,
-			IReadOnlyList<DeploymentContext> deploymentContexts)
+			IReadOnlyList<DeploymentContext> deploymentContexts,
+			IEnumerable<CrimeForgeAdditionalPakFile> additionalPakFiles = null)
 		{
 			var platformCares =
 				Params.ClientTargetPlatformInstances[0].RequiresPak(Params);
@@ -1580,6 +1871,7 @@ namespace CrimeForge.Automation
 				foreach (var sc in deploymentContexts)
 				{
 					Project.CreateStagingManifest(Params, sc);
+					StageAdditionalPakFiles(sc, additionalPakFiles);
 					Project.CleanStagingDirectory(Params, sc);
 				}
 
@@ -2885,6 +3177,13 @@ namespace CrimeForge.Automation
 
 			try
 			{
+				CrimeForgePALPackagingManifest palManifest =
+					LoadPALPackagingManifest(
+						cmd,
+						pluginName,
+						chunkId
+					);
+
 				// ============================================================
 				// PASS 1
 				// ============================================================
@@ -2916,7 +3215,8 @@ namespace CrimeForge.Automation
 				result.SetPhase("PASS 1: Stage plugin DLC");
 				CopyBuildToStagingDirectory(
 					dlcParams,
-					dlcContexts
+					dlcContexts,
+					palManifest.AdditionalPakFiles
 				);
 
 				result.SetPhase("PASS 1: Preserve plugin shell");
@@ -2946,13 +3246,6 @@ namespace CrimeForge.Automation
 				);
 
 				result.SetPhase("PASS 2: Prepare PAL chunk cook");
-
-				CrimeForgePALPackagingManifest palManifest =
-					LoadPALPackagingManifest(
-						cmd,
-						pluginName,
-						chunkId
-					);
 
 				LogInformation(
 					"PASS 2 deterministic PAL input: {0} exact Chunk {1} package(s), "
@@ -3159,19 +3452,16 @@ namespace CrimeForge.Automation
 
 				if (!string.IsNullOrEmpty(gameDir))
 				{
-					var bootstrapExePath =
-						Path.Combine(
-							gameDir,
-							GameExecutableName
-						);
+					var gameLayout = RequirePAYDAY3GameLayout(gameDir);
+					gameDir = gameLayout.InstallDirectory;
 
-					if (!FileExists(bootstrapExePath))
-					{
-						throw new AutomationException(
-							"Provided -GameDir is invalid: expected '{0}'",
-							bootstrapExePath
-						);
-					}
+					LogInformation(
+						"Resolved PAYDAY 3 install: {0} ({1})",
+						gameDir,
+						gameLayout.IsMicrosoftStore
+							? "Microsoft Store/Xbox WinGDK"
+							: "Steam/Epic desktop"
+					);
 				}
 
 				var pd3Params = new PD3Params

@@ -123,11 +123,11 @@ void FCrimeForgeModule::RegisterSettings() const {
         SettingsModule->UnregisterSettings(TEXT("Project"), TEXT("CrimeForge"), TEXT("Settings"));
 
         // Register CrimeForge like a normal editor plugin: one page under Project Settings -> Plugins.
-        // The UObject property categories provide the General / JSON Importer sections within the page.
+        // The UObject property categories provide the CrimeForge settings sections within the page.
         ISettingsSectionPtr SettingsSection = SettingsModule->RegisterSettings(
             TEXT("Project"), TEXT("Plugins"), TEXT("CrimeForge"),
             LOCTEXT("CrimeForgeSettingsName", "CrimeForge"),
-            LOCTEXT("CrimeForgeSettingsDescription", "CrimeForge settings for PAYDAY 3 modding, packaging, AssetReader and JSON importing."),
+            LOCTEXT("CrimeForgeSettingsDescription", "CrimeForge settings for PAYDAY 3 modding and packaging."),
             UCrimeForgeSettings::Get()
         );
 

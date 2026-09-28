@@ -1,3 +1,0 @@
-
-
-#include "Settings/CrimeForgeJsonImporterSettings.h"

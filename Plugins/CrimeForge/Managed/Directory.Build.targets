@@ -1,6 +1,0 @@
-<Project>
-  <!--
-    Deliberately empty barrier. Prevents Directory.Build.targets from the host
-    Unreal project/repository from mutating CrimeForge's managed build.
-  -->
-</Project>

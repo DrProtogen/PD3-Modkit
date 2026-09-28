@@ -1,4 +1,4 @@
-#include "CrimeForgeModEntry.h"
+﻿#include "CrimeForgeModEntry.h"
 #include "CrimeForge.h"
 #include "CrimeForgeSettings.h"
 #include "CrimeForgeStyle.h"
@@ -19,6 +19,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/AssetManagerSettings.h"
@@ -1893,6 +1894,462 @@ namespace
 		}
 	}
 
+
+	struct FCrimeForgeAdditionalPakFile
+	{
+		FString Source;
+		FString StagedPath;
+	};
+
+	bool TryGetWwiseEventShortId(const FString& ObjectPath, uint32& OutShortId)
+	{
+		OutShortId = 0;
+
+		/*
+		 * Prefer the Asset Registry metadata that Wwise itself writes for all
+		 * AkAudioType assets. This is both cheaper and more robust than walking
+		 * FWwiseEventInfo through reflection, where WwiseShortId is inherited
+		 * from FWwiseObjectInfo.
+		 */
+		const FSoftObjectPath SoftPath(ObjectPath);
+		const FString PackageName = SoftPath.GetLongPackageName();
+		if (!PackageName.IsEmpty())
+		{
+			FAssetRegistryModule& AssetRegistryModule =
+				FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+					TEXT("AssetRegistry"));
+			IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+			TArray<FAssetData> Assets;
+			AssetRegistry.GetAssetsByPackageName(
+				FName(*PackageName),
+				Assets,
+				false);
+
+			for (const FAssetData& AssetData : Assets)
+			{
+				if (!AssetData.GetObjectPathString().Equals(
+						ObjectPath,
+						ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+
+				const FString ClassPath = AssetData.AssetClassPath.ToString();
+				if (!ClassPath.EndsWith(
+						TEXT(".AkAudioEvent"),
+						ESearchCase::IgnoreCase) &&
+					!ClassPath.Equals(
+						TEXT("/Script/AkAudio.AkAudioEvent"),
+						ESearchCase::IgnoreCase))
+				{
+					return false;
+				}
+
+				auto ShortIdTag =
+					AssetData.TagsAndValues.FindTag(FName(TEXT("WwiseShortId")));
+				if (ShortIdTag.IsSet())
+				{
+					OutShortId = static_cast<uint32>(
+						FCString::Strtoui64(
+							*ShortIdTag.GetValue(),
+							nullptr,
+							10));
+					if (OutShortId != 0)
+					{
+						return true;
+					}
+				}
+			}
+		}
+
+		/* Fallback for an asset whose registry tags have not refreshed yet. */
+		UObject* Asset = UEditorAssetLibrary::LoadAsset(ObjectPath);
+		if (!Asset || Asset->GetClass()->GetName() != TEXT("AkAudioEvent"))
+		{
+			return false;
+		}
+
+		const FStructProperty* EventInfoProperty =
+			FindFProperty<FStructProperty>(Asset->GetClass(), TEXT("EventInfo"));
+		if (!EventInfoProperty || !EventInfoProperty->Struct)
+		{
+			return false;
+		}
+
+		const void* EventInfo =
+			EventInfoProperty->ContainerPtrToValuePtr<void>(Asset);
+		const FUInt32Property* ShortIdProperty =
+			FindFProperty<FUInt32Property>(
+				EventInfoProperty->Struct,
+				TEXT("WwiseShortId"));
+		if (!ShortIdProperty)
+		{
+			return false;
+		}
+
+		OutShortId =
+			ShortIdProperty->GetPropertyValue_InContainer(EventInfo);
+		return OutShortId != 0;
+	}
+
+	FString GetConfiguredWwiseRootOutputPath()
+	{
+		auto ReadRootPath = [](const TCHAR* ClassPath,
+			const TCHAR* PropertyName) -> FString
+		{
+			UClass* SettingsClass = FindObject<UClass>(nullptr, ClassPath);
+			if (!SettingsClass)
+			{
+				return FString();
+			}
+
+			UObject* Settings = SettingsClass->GetDefaultObject();
+			const FStructProperty* RootProperty =
+				FindFProperty<FStructProperty>(SettingsClass, PropertyName);
+			if (!RootProperty || !RootProperty->Struct)
+			{
+				return FString();
+			}
+
+			const void* RootValue =
+				RootProperty->ContainerPtrToValuePtr<void>(Settings);
+			const FStrProperty* PathProperty =
+				FindFProperty<FStrProperty>(RootProperty->Struct, TEXT("Path"));
+			return PathProperty
+				? PathProperty->GetPropertyValue_InContainer(RootValue)
+				: FString();
+		};
+
+		FString Root = ReadRootPath(
+			TEXT("/Script/AkAudio.AkSettingsPerUser"),
+			TEXT("RootOutputPathOverride"));
+
+		if (Root.IsEmpty())
+		{
+			Root = ReadRootPath(
+				TEXT("/Script/AkAudio.AkSettings"),
+				TEXT("RootOutputPath"));
+		}
+
+		if (Root.IsEmpty())
+		{
+			return FString();
+		}
+
+		if (FPaths::IsRelative(Root))
+		{
+			Root = FPaths::ConvertRelativePathToFull(
+				FPaths::ProjectContentDir(),
+				Root);
+		}
+
+		FPaths::CollapseRelativeDirectories(Root);
+		FPaths::NormalizeDirectoryName(Root);
+		return Root;
+	}
+
+	void GatherWwisePakFiles(
+		const TArray<FString>& ExplicitPALAssets,
+		TArray<FCrimeForgeAdditionalPakFile>& OutFiles)
+	{
+		TSet<uint32> EventIds;
+
+		/*
+		 * Intentionally inspect ONLY assets explicitly authored into the PAL.
+		 * Do not walk PAL-managed dependencies here. Base-game Wwise events and
+		 * mod Wwise events both live under /Game/WwiseAudio, so PAL membership is
+		 * the opt-in signal for copying generated BNK/WEM data.
+		 */
+		for (const FString& ObjectPath : ExplicitPALAssets)
+		{
+			uint32 ShortId = 0;
+			if (TryGetWwiseEventShortId(ObjectPath, ShortId))
+			{
+				EventIds.Add(ShortId);
+				UE_LOG(
+					LogCrimeForge,
+					Display,
+					TEXT("Wwise PAL opt-in: %s [ShortId=%u]"),
+					*ObjectPath,
+					ShortId);
+			}
+		}
+
+		if (EventIds.IsEmpty())
+		{
+			return;
+		}
+
+		const FString RootOutput = GetConfiguredWwiseRootOutputPath();
+		if (RootOutput.IsEmpty() ||
+			!IFileManager::Get().DirectoryExists(*RootOutput))
+		{
+			UE_LOG(
+				LogCrimeForge,
+				Warning,
+				TEXT(
+					"PAL explicitly references %d Wwise event(s), but no usable "
+					"Wwise Root Output Path is configured. Skipping BNK/WEM packaging."),
+				EventIds.Num());
+			return;
+		}
+
+		const FString PlatformRoot =
+			FPaths::Combine(RootOutput, TEXT("Windows"));
+		if (!IFileManager::Get().DirectoryExists(*PlatformRoot))
+		{
+			UE_LOG(
+				LogCrimeForge,
+				Warning,
+				TEXT(
+					"PAL explicitly references %d Wwise event(s), but the generated "
+					"Windows SoundBank directory does not exist: %s"),
+				EventIds.Num(),
+				*PlatformRoot);
+			return;
+		}
+
+		/*
+		 * Wwise does not always emit a global SoundbanksInfo.json. With per-bank
+		 * metadata enabled, each generated bank/event has its own JSON file, for
+		 * example GeneratedSoundBanks/Windows/Event/Test.json. Those files still
+		 * contain the normal SoundBanksInfo -> SoundBanks schema, including the
+		 * bank Path, Events/Ids, and loose Media paths.
+		 *
+		 * Build the lookup from those generated JSON files instead of requiring
+		 * SoundbanksInfo.json. Match by the Wwise Short ID from the explicit PAL
+		 * AkAudioEvent so Unreal asset names/locations do not have to match Wwise.
+		 */
+		TArray<FString> MetadataFiles;
+		IFileManager::Get().FindFilesRecursive(
+			MetadataFiles,
+			*PlatformRoot,
+			TEXT("*.json"),
+			true,
+			false,
+			false);
+
+		if (MetadataFiles.IsEmpty())
+		{
+			UE_LOG(
+				LogCrimeForge,
+				Warning,
+				TEXT(
+					"PAL explicitly references %d Wwise event(s), but no generated "
+					"Wwise JSON metadata was found under %s. Generate Windows "
+					"SoundBanks with JSON metadata before packaging."),
+				EventIds.Num(),
+				*PlatformRoot);
+			return;
+		}
+
+		TSet<FString> AddedStagedPaths;
+		TSet<uint32> MatchedEventIds;
+
+		auto AddGeneratedFile = [&](const FString& RelativePath)
+		{
+			if (RelativePath.IsEmpty())
+			{
+				return;
+			}
+
+			FString CleanRelative = RelativePath;
+			CleanRelative.ReplaceInline(TEXT("\\"), TEXT("/"));
+			while (CleanRelative.StartsWith(TEXT("/")))
+			{
+				CleanRelative.RightChopInline(1, EAllowShrinking::No);
+			}
+
+			const FString Source =
+				FPaths::Combine(PlatformRoot, CleanRelative);
+			const FString StagedPath =
+				FString(TEXT("PAYDAY3/Content/WwiseAudio/")) + CleanRelative;
+
+			if (!IFileManager::Get().FileExists(*Source))
+			{
+				UE_LOG(
+					LogCrimeForge,
+					Warning,
+					TEXT("Wwise generated resource is missing: %s"),
+					*Source);
+				return;
+			}
+
+			if (!AddedStagedPaths.Contains(StagedPath))
+			{
+				AddedStagedPaths.Add(StagedPath);
+				OutFiles.Add({Source, StagedPath});
+			}
+		};
+
+		auto ParseWwiseId = [](const TSharedPtr<FJsonObject>& Object,
+		const TCHAR* FieldName,
+		uint32& OutId) -> bool
+		{
+			OutId = 0;
+			if (!Object.IsValid())
+			{
+				return false;
+			}
+
+			FString IdString;
+			if (Object->TryGetStringField(FieldName, IdString))
+			{
+				OutId = static_cast<uint32>(
+					FCString::Strtoui64(*IdString, nullptr, 10));
+				return OutId != 0;
+			}
+
+			double IdNumber = 0.0;
+			if (Object->TryGetNumberField(FieldName, IdNumber) && IdNumber > 0.0)
+			{
+				OutId = static_cast<uint32>(IdNumber);
+				return OutId != 0;
+			}
+
+			return false;
+		};
+
+		for (const FString& MetadataFile : MetadataFiles)
+		{
+			FString JsonText;
+			if (!FFileHelper::LoadFileToString(JsonText, *MetadataFile))
+			{
+				continue;
+			}
+
+			TSharedPtr<FJsonObject> RootJson;
+			const TSharedRef<TJsonReader<>> Reader =
+				TJsonReaderFactory<>::Create(JsonText);
+			if (!FJsonSerializer::Deserialize(Reader, RootJson) ||
+				!RootJson.IsValid())
+			{
+				continue;
+			}
+
+			const TSharedPtr<FJsonObject>* SoundBanksInfo = nullptr;
+			if (!RootJson->TryGetObjectField(
+					TEXT("SoundBanksInfo"),
+					SoundBanksInfo) ||
+				!SoundBanksInfo ||
+				!SoundBanksInfo->IsValid())
+			{
+				continue;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Banks = nullptr;
+			if (!(*SoundBanksInfo)->TryGetArrayField(
+					TEXT("SoundBanks"),
+					Banks) ||
+				!Banks)
+			{
+				continue;
+			}
+
+			for (const TSharedPtr<FJsonValue>& BankValue : *Banks)
+			{
+				const TSharedPtr<FJsonObject> Bank =
+					BankValue.IsValid() ? BankValue->AsObject() : nullptr;
+				if (!Bank.IsValid())
+				{
+					continue;
+				}
+
+				bool bSelectedEventBank = false;
+				const TArray<TSharedPtr<FJsonValue>>* Events = nullptr;
+				if (Bank->TryGetArrayField(TEXT("Events"), Events) && Events)
+				{
+					for (const TSharedPtr<FJsonValue>& EventValue : *Events)
+					{
+						const TSharedPtr<FJsonObject> Event =
+							EventValue.IsValid() ? EventValue->AsObject() : nullptr;
+						uint32 EventId = 0;
+						if (ParseWwiseId(Event, TEXT("Id"), EventId) &&
+							EventIds.Contains(EventId))
+						{
+							bSelectedEventBank = true;
+							MatchedEventIds.Add(EventId);
+						}
+					}
+				}
+
+				/*
+				 * Auto-defined Event banks normally use the Event Short ID as the
+				 * bank ID as well. Keep this fallback for metadata variants that do
+				 * not emit an Events array.
+				 */
+				if (!bSelectedEventBank)
+				{
+					uint32 BankId = 0;
+					if (ParseWwiseId(Bank, TEXT("Id"), BankId) &&
+						EventIds.Contains(BankId))
+					{
+						bSelectedEventBank = true;
+						MatchedEventIds.Add(BankId);
+					}
+				}
+
+				if (!bSelectedEventBank)
+				{
+					continue;
+				}
+
+				FString BankPath;
+				if (Bank->TryGetStringField(TEXT("Path"), BankPath))
+				{
+					AddGeneratedFile(BankPath);
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>* Media = nullptr;
+				if (Bank->TryGetArrayField(TEXT("Media"), Media) && Media)
+				{
+					for (const TSharedPtr<FJsonValue>& MediaValue : *Media)
+					{
+						const TSharedPtr<FJsonObject> MediaObject =
+							MediaValue.IsValid() ? MediaValue->AsObject() : nullptr;
+						FString MediaPath;
+						if (MediaObject.IsValid() &&
+							MediaObject->TryGetStringField(TEXT("Path"), MediaPath))
+						{
+							AddGeneratedFile(MediaPath);
+						}
+					}
+				}
+			}
+
+			if (MatchedEventIds.Num() == EventIds.Num())
+			{
+				break;
+			}
+		}
+
+		for (const uint32 EventId : EventIds)
+		{
+			if (!MatchedEventIds.Contains(EventId))
+			{
+				UE_LOG(
+					LogCrimeForge,
+					Warning,
+					TEXT(
+						"Wwise Event ShortId %u is explicitly included in the PAL, "
+						"but no matching generated bank metadata was found under %s."),
+					EventId,
+					*PlatformRoot);
+			}
+		}
+
+		UE_LOG(
+			LogCrimeForge,
+			Display,
+			TEXT(
+				"Wwise PAL scan found %d/%d explicitly selected event(s) in generated "
+				"per-bank JSON metadata and %d BNK/WEM file(s) to stage into the main mod pak."),
+			MatchedEventIds.Num(),
+			EventIds.Num(),
+			OutFiles.Num());
+	}
+
 	bool WritePALPackagingManifest(
 		const IPlugin& Plugin,
 		const int32 ChunkId,
@@ -1959,6 +2416,18 @@ namespace
 		ExternalCookPackages.Sort();
 		ExpectedChunkPackages.Sort();
 
+		TArray<FString> ExplicitWwiseCandidates =
+			Data.ExplicitInternalAssets;
+		for (const FString& ObjectPath : Data.ExternalAssets)
+		{
+			ExplicitWwiseCandidates.AddUnique(ObjectPath);
+		}
+
+		TArray<FCrimeForgeAdditionalPakFile> AdditionalPakFiles;
+		GatherWwisePakFiles(
+			ExplicitWwiseCandidates,
+			AdditionalPakFiles);
+
 		if (ExternalCookPackages.Num() == 0)
 		{
 			UE_LOG(
@@ -2011,6 +2480,19 @@ namespace
 		RootObject->SetArrayField(
 			TEXT("ExpectedChunkPackages"),
 			ExpectedValues);
+
+		TArray<TSharedPtr<FJsonValue>> AdditionalPakValues;
+		for (const FCrimeForgeAdditionalPakFile& File : AdditionalPakFiles)
+		{
+			TSharedRef<FJsonObject> FileObject = MakeShared<FJsonObject>();
+			FileObject->SetStringField(TEXT("Source"), File.Source);
+			FileObject->SetStringField(TEXT("StagedPath"), File.StagedPath);
+			AdditionalPakValues.Add(
+				MakeShared<FJsonValueObject>(FileObject));
+		}
+		RootObject->SetArrayField(
+			TEXT("AdditionalPakFiles"),
+			AdditionalPakValues);
 
 		FString JsonText;
 		const TSharedRef<TJsonWriter<>> Writer =
@@ -3814,7 +4296,20 @@ bool SCrimeForgeModEntry::RunPreflightValidation() const
 			const FString DependencyString =
 				DependencyName.ToString();
 
-			if (DependencyString.Contains(
+			// Only treat PLACEHOLDER_* dependencies inside this mod's own
+			// plugin mount as stale CrimeForge template leftovers.
+			//
+			// PAYDAY 3 legitimately contains base-game /Game assets whose
+			// real names include PLACEHOLDER_ (for example the Wwise
+			// PLACEHOLDER_UI_confirm / PLACEHOLDER_UI_highlight events).
+			// Those are valid external dependencies and must not block forge.
+			const bool bDependencyIsInsideThisPlugin =
+				DependencyString.StartsWith(
+					PluginContentPath,
+					ESearchCase::IgnoreCase);
+
+			if (bDependencyIsInsideThisPlugin &&
+				DependencyString.Contains(
 					TEXT("PLACEHOLDER_"),
 					ESearchCase::IgnoreCase))
 			{
@@ -3826,7 +4321,7 @@ bool SCrimeForgeModEntry::RunPreflightValidation() const
 
 	if (PlaceholderDependencyPackages.Num() == 0)
 	{
-		Result.Pass(TEXT("No stale PLACEHOLDER_* package references were found."));
+		Result.Pass(TEXT("No stale PLACEHOLDER_* package references were found inside the mod plugin."));
 	}
 	else
 	{

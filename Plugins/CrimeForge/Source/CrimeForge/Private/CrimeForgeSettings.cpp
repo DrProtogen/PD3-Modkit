@@ -90,12 +90,6 @@ UCrimeForgeSettings* UCrimeForgeSettings::Get()
     return Settings;
 }
 
-bool UCrimeForgeSettings::AreExperimentalFeaturesEnabled()
-{
-    const UCrimeForgeSettings* Settings = Get();
-    return Settings != nullptr && Settings->bEnableExperimentalFeatures;
-}
-
 void UCrimeForgeSettings::SaveSettings()
 {
     SaveConfig();

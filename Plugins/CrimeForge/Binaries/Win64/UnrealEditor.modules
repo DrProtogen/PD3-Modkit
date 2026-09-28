@@ -1,11 +1,7 @@
 {
-	"BuildId": "06a677d3-5afb-4cde-9eec-d54d5f001424",
+	"BuildId": "815ee2db-6869-4eaa-864b-c19874902eb7",
 	"Modules": 
 	{
-		"CrimeForge": "UnrealEditor-CrimeForge.dll",
-		"CrimeForgeBlueprintFormatter": "UnrealEditor-CrimeForgeBlueprintFormatter.dll",
-		"CrimeForgeJsonImporter": "UnrealEditor-CrimeForgeJsonImporter.dll",
-		"Detex": "UnrealEditor-Detex.dll",
-		"NVTT": "UnrealEditor-NVTT.dll"
+		"CrimeForge": "UnrealEditor-CrimeForge.dll"
 	}
 }
