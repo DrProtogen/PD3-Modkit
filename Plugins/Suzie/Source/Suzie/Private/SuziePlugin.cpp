@@ -23,12 +23,14 @@
 #include "UObject/ObjectSaveContext.h"
 #include "Misc/CoreDelegates.h"
 #include "Modules/ModuleManager.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/PackageName.h"
 #include "PropertyEditorModule.h"
 #include "SuzieDecompressionHelper.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "UObject/UObjectAllocator.h"
 #include "Misc/ScopedSlowTask.h"
+#include "GameplayTagsManager.h"
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
 #include "UObject/PropertyOptional.h"
 #endif
@@ -61,6 +63,32 @@ namespace
     static bool ShouldLogSuzieLayoutWarnings()
     {
         return CVarSuzieLogLayoutWarnings.GetValueOnAnyThread() != 0;
+    }
+
+    // PAYDAY 3 gameplay tags are stored as data under Config/Tags rather than
+    // compiled into Suzie. This keeps the Editor-only module cook-safe and lets
+    // the retail tag list be updated without rebuilding the plugin.
+    static void RegisterPD3RetailGameplayTagConfig()
+    {
+        const TSharedPtr<IPlugin> SuziePlugin = IPluginManager::Get().FindPlugin(TEXT("Suzie"));
+        if (!SuziePlugin.IsValid())
+        {
+            UE_LOG(LogSuzie, Error, TEXT("Could not locate the Suzie plugin while registering PAYDAY 3 GameplayTags"));
+            return;
+        }
+
+        const FString TagConfigPath = FPaths::Combine(
+            SuziePlugin->GetBaseDir(),
+            TEXT("Config"),
+            TEXT("Tags"));
+
+        UGameplayTagsManager::Get().AddTagIniSearchPath(TagConfigPath);
+
+        UE_LOG(
+            LogSuzie,
+            Display,
+            TEXT("Registered PAYDAY 3 GameplayTag config directory: %s"),
+            *TagConfigPath);
     }
 
     struct FSuzieRetailABIAuditStats
@@ -110,7 +138,7 @@ namespace
         GSuzieRetailABIAuditStats = FSuzieRetailABIAuditStats{};
 
         GSuzieRetailABIReportLines.Reset();
-        GSuzieRetailABIReportLines.Add(TEXT("Suzie PAYDAY 3 Cooked Serialization ABI Report (v4.5)"));
+        GSuzieRetailABIReportLines.Add(TEXT("Suzie PAYDAY 3 Cooked Serialization ABI Report (v4.6.4)"));
         GSuzieRetailABIReportLines.Add(TEXT("=============================================="));
         GSuzieRetailABIReportLines.Add(TEXT(""));
         GSuzieRetailABIReportLines.Add(TEXT("This report compares the schema seen by cooked unversioned serialization."));
@@ -119,7 +147,7 @@ namespace
         GSuzieRetailABIReportLines.Add(TEXT(""));
 
         GSuzieEditorReflectionReportLines.Reset();
-        GSuzieEditorReflectionReportLines.Add(TEXT("Suzie PAYDAY 3 Editor Reflection Differences (v4.5)"));
+        GSuzieEditorReflectionReportLines.Add(TEXT("Suzie PAYDAY 3 Editor Reflection Differences (v4.6.4)"));
         GSuzieEditorReflectionReportLines.Add(TEXT("============================================="));
         GSuzieEditorReflectionReportLines.Add(TEXT(""));
         GSuzieEditorReflectionReportLines.Add(TEXT("This report compares RAW direct editor PropertyLink reflection against retail."));
@@ -133,7 +161,7 @@ namespace
         GSuzieNativeLocalLayoutLines.Reset();
         GSuzieAlignmentOnlyLayoutLines.Reset();
 
-        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Suzie PAYDAY 3 Native Memory Layout Diagnostics (v4.5)"));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Suzie PAYDAY 3 Native Memory Layout Diagnostics (v4.6.4)"));
         GSuzieNativeMemoryLayoutReportLines.Add(TEXT("======================================================"));
         GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
         GSuzieNativeMemoryLayoutReportLines.Add(TEXT("DIAGNOSTIC ONLY: a physical size/alignment difference does NOT imply cooked asset incompatibility."));
@@ -780,6 +808,49 @@ void FSuziePluginModule::StartupModule()
 {
     UE_LOG(LogSuzie, Display, TEXT("Suzie plugin starting"));
 
+    // Make PAYDAY 3's retail GameplayTag dictionary available before cooked
+    // assets are deserialized. The tags are data-driven so Suzie remains an
+    // Editor-only module and tag updates do not require a plugin rebuild.
+    RegisterPD3RetailGameplayTagConfig();
+
+    // Cook commandlets do not necessarily load the same native/editor modules as
+    // the interactive editor before PreDefault project plugins run. PAYDAY's
+    // MoviePipelineDeferredPassBase contains TArray<FActorLayer>, so make sure
+    // ActorLayerUtilities has registered /Script/ActorLayerUtilities.ActorLayer
+    // before Suzie reconstructs MovieRenderPipelineRenderPasses.
+    //
+    // Without this, the interactive editor audit is exact but the cook commandlet
+    // loses ActorLayers, shifts DataLayers into its slot, and produces six inherited
+    // cooked-schema mismatches.
+    if (IsRunningCommandlet())
+    {
+        static const FName ActorLayerUtilitiesModuleName(TEXT("ActorLayerUtilities"));
+
+        FString ActorLayerUtilitiesModuleFilename;
+        if (FModuleManager::Get().ModuleExists(
+                *ActorLayerUtilitiesModuleName.ToString(),
+                &ActorLayerUtilitiesModuleFilename)
+            && !FModuleManager::Get().IsModuleLoaded(ActorLayerUtilitiesModuleName))
+        {
+            if (FModuleManager::Get().LoadModulePtr<IModuleInterface>(
+                    ActorLayerUtilitiesModuleName) != nullptr)
+            {
+                UE_LOG(
+                    LogSuzie,
+                    Display,
+                    TEXT("Cook commandlet preloaded ActorLayerUtilities before retail reflection reconstruction"));
+            }
+            else
+            {
+                UE_LOG(
+                    LogSuzie,
+                    Warning,
+                    TEXT("Cook commandlet could not preload ActorLayerUtilities (%s); ActorLayer retail references may remain unresolved"),
+                    *ActorLayerUtilitiesModuleFilename);
+            }
+        }
+    }
+
     ProcessAllJsonClassDefinitions();
 
     if (!GSuzieDoorPersistencePreSaveHandle.IsValid())
@@ -1148,10 +1219,10 @@ UClass* FSuziePluginModule::FindOrCreateUnregisteredClass(FDynamicClassGeneratio
     //Set super structure and ClassWithin (they are required prior to registering)
     ConstructedClassObject->SetSuperStruct(ParentClass);
     ConstructedClassObject->ClassWithin = UObject::StaticClass();
-#if (ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 5)
-    // Added in 5.5, needs to be carried over from the parent class
-    ConstructedClassObject->TotalFieldCount = ParentClass->TotalFieldCount;
-#endif
+    // UE 5.5+ generates TotalFieldCount during UStruct::Link/StaticLink.
+    // Do not write the internal TotalFieldCount field directly; newer engine
+    // versions deprecate that API and StaticLink() below is the authoritative
+    // place to rebuild the field count.
 
     //Field with cpp type info only exists in editor, in shipping SetCppTypeInfoStatic is empty
     static const FCppClassTypeInfoStatic TypeInfoStatic{false};
@@ -2722,14 +2793,21 @@ class FDynamicStructCppStructOps : public UScriptStruct::ICppStructOps
     UScriptStruct* DynamicStruct;
     int32 ParentInitializedSize;
     bool bHasDestructor;
+    bool bRetailCopyNative;
 
 public:
-    FDynamicStructCppStructOps(int32 InSize, int32 InAlignment, UScriptStruct::ICppStructOps* InParentOps, UScriptStruct* InStruct)
+    FDynamicStructCppStructOps(
+        int32 InSize,
+        int32 InAlignment,
+        UScriptStruct::ICppStructOps* InParentOps,
+        UScriptStruct* InStruct,
+        bool bInRetailCopyNative)
         : ICppStructOps(InSize, InAlignment)
         , ParentCppStructOps(InParentOps)
         , DynamicStruct(InStruct)
         , ParentInitializedSize(InParentOps ? InParentOps->GetSize() : 0)
         , bHasDestructor(false)
+        , bRetailCopyNative(bInRetailCopyNative)
     {
         // Destructor is needed if the parent needs destruction or if any child properties need destruction
         if (InParentOps && InParentOps->HasDestructor())
@@ -2821,7 +2899,67 @@ public:
     virtual bool NetDeltaSerialize(FNetDeltaSerializeInfo& DeltaParms, void* Data) override { return false; }
     virtual void PostScriptConstruct(void* Data) override {}
     virtual void GetPreloadDependencies(void* Data, TArray<UObject*>& OutDeps) override {}
-    virtual bool Copy(void* Dest, void const* Src, int32 ArrayDim) override { return false; }
+    virtual bool Copy(void* Dest, void const* Src, int32 ArrayDim) override
+    {
+        if (!bRetailCopyNative
+            || Dest == nullptr
+            || Src == nullptr
+            || ArrayDim <= 0
+            || DynamicStruct == nullptr)
+        {
+            return false;
+        }
+
+        // Retail STRUCT_CopyNative means the struct's native copy path is part of
+        // its ABI. We cannot call Starbreeze's missing C++ copy implementation, so
+        // reproduce the safe observable behavior through reflected properties.
+        //
+        // Do NOT memcpy the whole struct. Some generated structs contain FString,
+        // TArray, UObject references, or native-parent state/vtables. Property-wise
+        // copying preserves ownership semantics and avoids copying hidden pointers.
+        const int32 StructStride = GetSize();
+        const UScriptStruct* SuperScriptStruct =
+            Cast<UScriptStruct>(DynamicStruct->GetSuperStruct());
+
+        const bool bCopyParentNatively =
+            ParentCppStructOps != nullptr
+            && SuperScriptStruct != nullptr
+            && EnumHasAnyFlags(SuperScriptStruct->StructFlags, STRUCT_CopyNative);
+
+        for (int32 ArrayIndex = 0; ArrayIndex < ArrayDim; ++ArrayIndex)
+        {
+            uint8* DestElement =
+                static_cast<uint8*>(Dest) + (StructStride * ArrayIndex);
+            const uint8* SrcElement =
+                static_cast<const uint8*>(Src) + (StructStride * ArrayIndex);
+
+            if (bCopyParentNatively)
+            {
+                if (!ParentCppStructOps->Copy(DestElement, SrcElement, 1))
+                {
+                    return false;
+                }
+            }
+
+            for (FProperty* Property = DynamicStruct->PropertyLink;
+                 Property != nullptr;
+                 Property = Property->PropertyLinkNext)
+            {
+                // If the native parent successfully copied its own region, only
+                // copy the generated child fields here. Otherwise copy all reflected
+                // fields, including inherited reflected fields.
+                if (bCopyParentNatively
+                    && Property->IsInContainer(ParentInitializedSize))
+                {
+                    continue;
+                }
+
+                Property->CopyCompleteValue_InContainer(DestElement, SrcElement);
+            }
+        }
+
+        return true;
+    }
     virtual bool Identical(const void* A, const void* B, uint32 PortFlags, bool& bOutResult) override { return false; }
     virtual bool ExportTextItem(FString& ValueStr, const void* PropertyValue, const void* DefaultValue, class UObject* Parent, int32 PortFlags, class UObject* ExportRootScope) override { return false; }
     virtual bool ImportTextItem(const TCHAR*& Buffer, void* Data, int32 PortFlags, class UObject* OwnerObject, FOutputDevice* ErrorText) override { return false; }
@@ -2877,6 +3015,34 @@ static UScriptStruct::ICppStructOps* FindNearestAncestorCppStructOps(UScriptStru
 // so we do not need an explicit mutex to guard the access to it during class initialization
 static TMap<UClass*, FDynamicClassConstructionData> DynamicClassConstructionData;
 
+static void ApplyGeneratedUHTEditorPropertyFlags(FProperty* Property)
+{
+    if (Property == nullptr)
+    {
+        return;
+    }
+
+    // UE4SS generated UHT headers expose reconstructed native instance fields as
+    // BlueprintReadWrite + EditAnywhere, even when the cooked runtime reflection
+    // reports BlueprintReadOnly/EditConst or omits the editor-facing specifiers.
+    //
+    // These flags only control editor / Blueprint access. They do not affect the
+    // property's serialized type, order, ArrayDim, offset, CPF_EditorOnly filtering,
+    // Config/Transient/SaveGame behaviour, replication flags, or native layout.
+    // Keep every serialization-relevant retail flag intact and normalize only the
+    // editor-facing access bits so dynamically reconstructed classes behave like the
+    // UE4SS UHT SDK when authoring mods.
+    Property->ClearPropertyFlags(
+        CPF_BlueprintReadOnly
+        | CPF_EditConst
+        | CPF_DisableEditOnInstance
+        | CPF_DisableEditOnTemplate);
+
+    Property->SetPropertyFlags(
+        CPF_BlueprintVisible
+        | CPF_Edit);
+}
+
 UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Context, const FString& ClassPath)
 {
     // Return existing class if exists
@@ -2916,23 +3082,34 @@ UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Co
 
     // Add properties to the class.
     //
-    // The retail jmap is the serialization ABI. Do not add editor-facing flags
-    // that the retail property did not actually have.
+    // Keep the retail jmap authoritative for serialization-relevant flags, type,
+    // order and layout, then normalize only the editor-facing access flags to match
+    // the UE4SS generated UHT SDK. Cooked runtime reflection is not a reliable source
+    // for the original BlueprintReadWrite/EditAnywhere UPROPERTY specifiers: fields
+    // that UE4SS exposes as writable can arrive here as BlueprintReadOnly/EditConst.
+    //
+    // This is intentionally generic. No Starbreeze class/property names are special-
+    // cased. Every dynamically reconstructed native instance field gets the same
+    // BlueprintReadWrite + EditAnywhere editor view while retaining its retail
+    // Config/Transient/SaveGame/replication/serialization flags and native layout.
     const TArray<TSharedPtr<FJsonValue>>& Properties = ClassDefinition->GetArrayField(TEXT("properties"));
     for (const TSharedPtr<FJsonValue>& PropertyDescriptor : Properties)
     {
         const TSharedPtr<FJsonObject> PropertyObject = PropertyDescriptor->AsObject();
+
+        // Build the property from the exact retail flags first. The generic editor
+        // compatibility pass below changes only mutability/visibility bits.
         if (FProperty* CreatedProperty = AddPropertyToStruct(Context, NewClass, PropertyObject, CPF_None))
         {
+            ApplyGeneratedUHTEditorPropertyFlags(CreatedProperty);
             // Build a normal safe Unreal layout first. After the whole class has
             // linked, TryApplyJmapStructLayout may replace these offsets atomically
             // if every reconstructed property fits the retail layout.
             NewClass->PropertiesSize = CreatedProperty->Link(EmptyPropertyLinkArchive);
             NewClass->MinAlignment = FMath::Max(NewClass->MinAlignment, CreatedProperty->GetMinAlignment());
-#if (ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 5)
-            // Added in 5.5, needs to be incremented for each new property added to the class
-            NewClass->TotalFieldCount++;
-#endif
+            // TotalFieldCount is intentionally not updated here. UStruct::StaticLink()
+            // rebuilds it from the complete property chain after all properties/functions
+            // have been installed.
 
             // Add property into the constructor/destructor lists based on its flags
             if (!CreatedProperty->HasAnyPropertyFlags(CPF_IsPlainOldData | CPF_NoDestructor))
@@ -3082,14 +3259,28 @@ UScriptStruct* FSuziePluginModule::FindOrCreateScriptStruct(FDynamicClassGenerat
         NewStruct->StructFlags = (EStructFlags) ((int32)NewStruct->StructFlags | (SuperScriptStruct->StructFlags & STRUCT_Inherit));
     }
 
-    // Note that only flags that are set manually (e.g. non-computed flags) should be listed here
+    // Preserve ordinary manually-set struct flags immediately, but DELAY the
+    // retail native ABI flags until synthetic CppStructOps have been registered.
+    //
+    // UE5.5 UScriptStruct::PrepareCppStructOps() treats STRUCT_Native as proof
+    // that a compiled-in IMPLEMENT_STRUCT registration already exists. Suzie's
+    // structs are created dynamically, so setting STRUCT_Native before we defer
+    // our synthetic ops causes:
+    //
+    //   Couldn't bind to native struct <Name>
+    //
+    // Track those retail flags now and apply them only immediately before the
+    // second PrepareCppStructOps(), after DeferCppStructOps() has populated the
+    // registry for this exact struct path.
     static const TArray<TPair<FString, EStructFlags>> StructFlagNameLookup = {
         {TEXT("STRUCT_Atomic"), STRUCT_Atomic},
         {TEXT("STRUCT_Immutable"), STRUCT_Immutable},
     };
 
-    // Convert struct flag names to the struct flags bitmask
+    // Convert struct flag names to the struct flags bitmask.
     const TSet<FString> StructFlagNames = ParseFlags(StructDefinition->GetStringField(TEXT("struct_flags")));
+    const bool bRetailNative = StructFlagNames.Contains(TEXT("STRUCT_Native"));
+    const bool bRetailCopyNative = StructFlagNames.Contains(TEXT("STRUCT_CopyNative"));
     for (const auto& [StructFlagName, StructFlagBit] : StructFlagNameLookup)
     {
         if (StructFlagNames.Contains(StructFlagName))
@@ -3098,11 +3289,24 @@ UScriptStruct* FSuziePluginModule::FindOrCreateScriptStruct(FDynamicClassGenerat
         }
     }
 
-    // Initialize properties for the struct using the exact retail flags.
+    // Initialize properties for the struct using the exact retail flags first.
+    //
+    // The cooked serialization ABI depends on property order/type/ArrayDim and
+    // CPF_EditorOnly filtering, not on Blueprint/editor mutability flags. Retail
+    // Starbreeze structs commonly mark members BlueprintReadOnly/EditConst because
+    // the shipping game constructs them through native code. Suzie's editor-facing
+    // reflection needs those same members writable so UK2Node_MakeStruct and
+    // UK2Node_SetFieldsInStruct can expose their pins.
+    //
+    // Keep BuildProperty authoritative to the retail jmap, then apply only the
+    // editor usability override after the property has been reconstructed.
     TArray<TSharedPtr<FJsonValue>> Properties = StructDefinition->GetArrayField(TEXT("properties"));
     for (const TSharedPtr<FJsonValue>& PropertyDescriptor : Properties)
     {
-        AddPropertyToStruct(Context, NewStruct, PropertyDescriptor->AsObject(), CPF_None);
+        if (FProperty* CreatedProperty = AddPropertyToStruct(Context, NewStruct, PropertyDescriptor->AsObject(), CPF_None))
+        {
+            ApplyGeneratedUHTEditorPropertyFlags(CreatedProperty);
+        }
     }
     
     // Mark all dynamic script structs as blueprint types
@@ -3162,18 +3366,50 @@ UScriptStruct* FSuziePluginModule::FindOrCreateScriptStruct(FDynamicClassGenerat
             NewStruct->GetPropertiesSize(),
             NewStruct->GetMinAlignment(),
             AncestorCppStructOps,
-            NewStruct));
+            NewStruct,
+            bRetailCopyNative));
 
-    // Re-run preparation so this dynamic struct picks up the deferred ops.
+    // Apply the authoritative retail native ABI flags only now, after the
+    // synthetic ops have been deferred for this path. This ordering is critical:
+    // PrepareCppStructOps() asserts for STRUCT_Native structs when no matching
+    // compiled/deferred ops registration exists yet.
+    if (bRetailNative)
+    {
+        NewStruct->StructFlags =
+            (EStructFlags)((int32)NewStruct->StructFlags | STRUCT_Native);
+    }
+    if (bRetailCopyNative)
+    {
+        NewStruct->StructFlags =
+            (EStructFlags)((int32)NewStruct->StructFlags | STRUCT_CopyNative);
+    }
+
+    // Re-run preparation so this dynamic struct binds to the deferred synthetic
+    // CppStructOps while the retail native/copy-native flags are already visible.
     NewStruct->ClearCppStructOps();
     NewStruct->PrepareCppStructOps();
+
+    // Keep the retail jmap authoritative in case PrepareCppStructOps normalizes
+    // flags according to compile-time traits that do not exist for Suzie types.
+    if (bRetailNative)
+    {
+        NewStruct->StructFlags =
+            (EStructFlags)((int32)NewStruct->StructFlags | STRUCT_Native);
+    }
+    if (bRetailCopyNative)
+    {
+        NewStruct->StructFlags =
+            (EStructFlags)((int32)NewStruct->StructFlags | STRUCT_CopyNative);
+    }
 
     UE_LOG(
         LogSuzie,
         Verbose,
-        TEXT("Installed synthetic CppStructOps for struct '%s' (native ancestor=%s, size=%d)"),
+        TEXT("Installed synthetic CppStructOps for struct '%s' (native ancestor=%s, retail native=%s, retail copy-native=%s, size=%d)"),
         *ObjectName,
         AncestorCppStructOps ? TEXT("true") : TEXT("false"),
+        bRetailNative ? TEXT("true") : TEXT("false"),
+        bRetailCopyNative ? TEXT("true") : TEXT("false"),
         NewStruct->GetPropertiesSize());
 
     NewStruct->SetMetaData(TEXT("SuzieDynamicStruct"), TEXT("true"));
@@ -3271,6 +3507,38 @@ UEnum* FSuziePluginModule::FindOrCreateEnum(FDynamicClassGenerationContext& Cont
     return NewEnum;
 }
 
+static void ApplyKnownUHTFunctionFlagOverrides(
+    const FString& OwnerClassPath,
+    const FName FunctionName,
+    EFunctionFlags& InOutFunctionFlags)
+{
+    // Runtime jmap data is authoritative for ABI/layout, but it can omit
+    // editor-facing UHT exposure specifiers. BlueprintImplementableEvent does
+    // NOT imply BlueprintCallable, so do not make all Blueprint events callable.
+    //
+    // UE4SS/UHT declaration:
+    //
+    //   class USBZSettingsButton
+    //   {
+    //   protected:
+    //       UFUNCTION(BlueprintCallable, BlueprintImplementableEvent)
+    //       void SettingChanged();
+    //   };
+    //
+    // Without FUNC_BlueprintCallable, Kismet reports:
+    //   Function 'SettingChanged' ... should not be called from a Blueprint
+    if (OwnerClassPath == TEXT("/Script/Starbreeze.SBZSettingsButton")
+        && FunctionName == FName(TEXT("SettingChanged")))
+    {
+        InOutFunctionFlags &= ~(FUNC_Public | FUNC_Private | FUNC_Native);
+        InOutFunctionFlags |=
+            FUNC_Protected
+            | FUNC_Event
+            | FUNC_BlueprintEvent
+            | FUNC_BlueprintCallable;
+    }
+}
+
 UFunction* FSuziePluginModule::FindOrCreateFunction(FDynamicClassGenerationContext& Context, const FString& FunctionPath)
 {
     if (FunctionPath.IsEmpty()) return nullptr;
@@ -3359,6 +3627,13 @@ UFunction* FSuziePluginModule::FindOrCreateFunction(FDynamicClassGenerationConte
         }
     }
 
+    // Restore known UHT/editor exposure bits before Bind() and before deciding
+    // whether the function should receive Suzie's synthetic native thunk.
+    ApplyKnownUHTFunctionFlagOverrides(
+        ClassPathOrPackageName,
+        FName(*ObjectName),
+        FunctionFlags);
+
     // Only native functions declared in /Script packages can be represented by Suzie's
     // synthetic native thunk. Cooked Blueprint functions under /Game are real script
     // exports whose bytecode is supplied by the retail package. Some dumps report
@@ -3424,6 +3699,20 @@ UFunction* FSuziePluginModule::FindOrCreateFunction(FDynamicClassGenerationConte
         // installed, so cooked Blueprint functions cannot accidentally inherit the thunk.
         NewFunction->FunctionFlags |= FUNC_Native;
         NewFunction->SetNativeFunc(&ExecSuzieNativeStub);
+
+        // The temporary script body above exists only so Bind()/StaticLink() can safely
+        // process dynamically-created functions before their synthetic native thunk is
+        // attached. A real native UFunction does not retain script bytecode. Leaving the
+        // { EX_Return, EX_Nothing, EX_EndOfScript } body in place makes direct ProcessEvent
+        // calls (for example MovieScene property setter invocation in the UMG editor) enter
+        // ExecSuzieNativeStub with Stack.Code pointing at EX_Return. The thunk then mistakes
+        // that byte for a caller argument expression and FFrame reports an undefined opcode.
+        //
+        // Cooked Blueprint VM calls are unaffected by clearing this: their Stack.Code belongs
+        // to the CALLER frame and still points at the encoded argument expressions.
+        NewFunction->Script.Empty();
+        NewFunction->Script.Shrink();
+
         GSuzieSyntheticNativeFunctions.Add(NewFunction);
     }
     if (TryApplyJmapStructLayout(NewFunction, FunctionDefinition))
@@ -3545,6 +3834,16 @@ void FSuziePluginModule::AddFunctionToClass(FDynamicClassGenerationContext& Cont
     {
         // Append additional flags to the function
         NewFunction->FunctionFlags |= ExtraFunctionFlags;
+
+        // Re-apply known UHT/editor exposure flags here as well. FindOrCreateFunction
+        // can return an already-created UFunction, so this guarantees the owning class
+        // sees the corrected flags before it is registered with Blueprint/Kismet.
+        EFunctionFlags CorrectedFunctionFlags = NewFunction->FunctionFlags;
+        ApplyKnownUHTFunctionFlagOverrides(
+            Class->GetPathName(),
+            NewFunction->GetFName(),
+            CorrectedFunctionFlags);
+        NewFunction->FunctionFlags = CorrectedFunctionFlags;
         
         // This function will always be linked as a last element of the list, so it has no next element
         NewFunction->Next = nullptr;
@@ -4169,33 +4468,41 @@ UClass* FSuziePluginModule::GetDynamicParentClassForBlueprintClass(UClass* InBlu
     return CurrentClass;
 }
 
-void FSuziePluginModule::CopySuzieDynamicDefaultsFromCDO(
+void FSuziePluginModule::CopySuzieDynamicDefaultsFromObject(
     UObject* DestinationObject,
+    const UObject* SourceObject,
     const UClass* TopLevelDynamicClass)
 {
-    if (DestinationObject == nullptr || TopLevelDynamicClass == nullptr)
+    if (DestinationObject == nullptr || SourceObject == nullptr || TopLevelDynamicClass == nullptr)
     {
         return;
     }
 
-    UObject* ClassDefaultObject = TopLevelDynamicClass->ClassDefaultObject;
-    if (ClassDefaultObject == nullptr || DestinationObject == ClassDefaultObject)
+    if (DestinationObject == SourceObject
+        || !DestinationObject->GetClass()->IsChildOf(TopLevelDynamicClass)
+        || !SourceObject->GetClass()->IsChildOf(TopLevelDynamicClass))
     {
         return;
     }
 
     // FObjectInitializer's optimized native-class path does not reliably copy
     // properties that Suzie appends dynamically to an otherwise native class.
-    // The old InitializationArchetype__ duplicate forced that copy indirectly,
-    // but duplicating arbitrary CDOs is unsafe for types such as UDataTable,
-    // UAISubsystem and UChannel.
+    // This affects more than exact /Script instances and generated CDOs: a cooked
+    // Blueprint template/instance (for example a nested UserWidget in a WidgetTree)
+    // can have a perfectly valid Blueprint archetype whose inherited Suzie fields
+    // are never copied into the new object. When the package omitted that field
+    // because it matched the archetype in retail, the reconstructed object then
+    // falls back to zero/null after an editor restart.
     //
-    // Initialize direct Suzie-reflected properties from the REAL reconstructed
-    // dynamic parent CDO instead. This is used both for exact Suzie instances and
-    // for generated/Blueprint CDOs derived from a Suzie class. Leave instanced/exported
-    // object references alone so normal default-subobject instancing and Blueprint
-    // component templates remain authoritative. Package properties are deserialized
-    // after construction and therefore still override these inherited defaults.
+    // Copy ONLY fields contributed by Suzie-reconstructed classes, and copy them
+    // from the object's real archetype when one exists. This preserves Blueprint
+    // defaults and template overrides instead of flattening everything back to the
+    // reconstructed native CDO. Explicit package values are deserialized later and
+    // therefore still win.
+    //
+    // Instanced/exported references are intentionally skipped. Normal UE subobject
+    // instancing and Blueprint component/widget templates remain authoritative for
+    // those object graphs.
     const UClass* CurrentDynamicClass = TopLevelDynamicClass;
     while (CurrentDynamicClass != nullptr
         && CurrentDynamicClass->ClassConstructor == &FSuziePluginModule::PolymorphicClassConstructorInvocationHelper)
@@ -4216,11 +4523,29 @@ void FSuziePluginModule::CopySuzieDynamicDefaultsFromCDO(
                 continue;
             }
 
-            Property->CopyCompleteValue_InContainer(DestinationObject, ClassDefaultObject);
+            Property->CopyCompleteValue_InContainer(DestinationObject, SourceObject);
         }
 
         CurrentDynamicClass = CurrentDynamicClass->GetSuperClass();
     }
+}
+
+void FSuziePluginModule::CopySuzieDynamicDefaultsFromCDO(
+    UObject* DestinationObject,
+    const UClass* TopLevelDynamicClass)
+{
+    if (DestinationObject == nullptr || TopLevelDynamicClass == nullptr)
+    {
+        return;
+    }
+
+    UObject* ClassDefaultObject = TopLevelDynamicClass->ClassDefaultObject;
+    if (ClassDefaultObject == nullptr || DestinationObject == ClassDefaultObject)
+    {
+        return;
+    }
+
+    CopySuzieDynamicDefaultsFromObject(DestinationObject, ClassDefaultObject, TopLevelDynamicClass);
 }
 
 void FSuziePluginModule::PolymorphicClassConstructorInvocationHelper(const FObjectInitializer& ObjectInitializer)
@@ -4272,6 +4597,22 @@ void FSuziePluginModule::PolymorphicClassConstructorInvocationHelper(const FObje
         && ConstructedObject != nullptr
         && ConstructedObject->HasAnyFlags(RF_ClassDefaultObject)
         && ObjectInitializer.GetClass()->IsChildOf(TopLevelDynamicClass);
+
+
+    // Non-CDO objects derived from a Suzie-reconstructed class must inherit the
+    // dynamically-added fields from their *actual* archetype. This is especially
+    // important for Blueprint templates/default subobjects and nested UserWidgets:
+    // their retail package often omits inherited values that are equal to the
+    // Blueprint archetype, so starting them from the native Suzie CDO (or zeroed
+    // memory) loses Blueprint-level defaults on reload.
+    UObject* InitializationArchetype = ObjectInitializer.GetArchetype();
+    const bool bShouldSeedInstanceFromArchetype =
+        ConstructedObject != nullptr
+        && !ConstructedObject->HasAnyFlags(RF_ClassDefaultObject)
+        && InitializationArchetype != nullptr
+        && InitializationArchetype != ConstructedObject
+        && ObjectInitializer.GetClass()->IsChildOf(TopLevelDynamicClass)
+        && InitializationArchetype->GetClass()->IsChildOf(TopLevelDynamicClass);
 
     // Run logic necessary for the top level dynamic class object.
     {
@@ -4336,16 +4677,42 @@ void FSuziePluginModule::PolymorphicClassConstructorInvocationHelper(const FObje
 
     if (bShouldSeedDerivedClassCDO)
     {
-        CopySuzieDynamicDefaultsFromCDO(ConstructedObject, TopLevelDynamicClass);
+        // Prefer the CDO's real archetype (normally the immediate superclass CDO),
+        // because an intermediate Blueprint class may itself override a Suzie-added
+        // native field. Fall back to the reconstructed dynamic CDO only when UE did
+        // not provide a compatible archetype.
+        // Use the public accessor instead of mixing UObject* with the
+        // TObjectPtr<UObject> ClassDefaultObject member in a conditional
+        // expression. MSVC 17.14+ treats that ternary as ambiguous.
+        const UObject* ReconstructedDynamicCDO = TopLevelDynamicClass->GetDefaultObject(false);
+        const UObject* DerivedCDODefaultSource =
+            InitializationArchetype != nullptr
+            && InitializationArchetype != ConstructedObject
+            && InitializationArchetype->GetClass()->IsChildOf(TopLevelDynamicClass)
+                ? InitializationArchetype
+                : ReconstructedDynamicCDO;
+
+        CopySuzieDynamicDefaultsFromObject(ConstructedObject, DerivedCDODefaultSource, TopLevelDynamicClass);
         UE_LOG(LogSuzie, VeryVerbose,
             TEXT("Seeded derived class CDO %s with inherited Suzie defaults from %s"),
             *ConstructedObject->GetPathName(),
-            *TopLevelDynamicClass->ClassDefaultObject->GetPathName());
+            DerivedCDODefaultSource ? *DerivedCDODefaultSource->GetPathName() : TEXT("<null>"));
 
         LogSuzieDoorPersistenceState(TEXT("SeededDerivedCDO"), ConstructedObject);
     }
+    else if (bShouldSeedInstanceFromArchetype)
+    {
+        CopySuzieDynamicDefaultsFromObject(ConstructedObject, InitializationArchetype, TopLevelDynamicClass);
+        UE_LOG(LogSuzie, VeryVerbose,
+            TEXT("Seeded Suzie-derived instance/template %s from real archetype %s"),
+            *ConstructedObject->GetPathName(),
+            *InitializationArchetype->GetPathName());
+    }
     else if (bShouldCopyExactDynamicDefaults)
     {
+        // Fallback for the unusual exact-class construction path where UE supplied
+        // no usable archetype. Normal exact instances are handled by the real-
+        // archetype branch above (their archetype is the reconstructed class CDO).
         CopySuzieDynamicDefaultsFromCDO(ConstructedObject, TopLevelDynamicClass);
         UE_LOG(LogSuzie, VeryVerbose,
             TEXT("Initialized exact Suzie instance %s from reconstructed CDO %s"),

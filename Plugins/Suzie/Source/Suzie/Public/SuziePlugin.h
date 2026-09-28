@@ -75,6 +75,7 @@ private:
     static UClass* GetNativeParentClassForDynamicClass(const UClass* InDynamicClass);
     static UClass* GetDynamicParentClassForBlueprintClass(UClass* InBlueprintClass);
     static void PolymorphicClassConstructorInvocationHelper(const FObjectInitializer& ObjectInitializer);
+    static void CopySuzieDynamicDefaultsFromObject(UObject* DestinationObject, const UObject* SourceObject, const UClass* TopLevelDynamicClass);
     static void CopySuzieDynamicDefaultsFromCDO(UObject* DestinationObject, const UClass* TopLevelDynamicClass);
     static void ExecutePolymorphicClassConstructorFrameForDynamicClass(const FObjectInitializer& ObjectInitializer, const UClass* DynamicClass);
 

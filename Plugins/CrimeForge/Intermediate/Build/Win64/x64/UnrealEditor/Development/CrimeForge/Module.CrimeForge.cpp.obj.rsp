@@ -1,12 +1,12 @@
-"F:\PAYDAYMODS\UE5\Projects\Personal\PAYDAY3 Source\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp"
-/FI"..\Intermediate\Build\Win64\x64\UnrealEditor\Development\UnrealEd\SharedPCH.UnrealEd.Project.ValApi.Cpp20.h"
-/FI"F:\PAYDAYMODS\UE5\Projects\Personal\PAYDAY3 Source\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Definitions.CrimeForge.h"
-/Yu"..\Intermediate\Build\Win64\x64\UnrealEditor\Development\UnrealEd\SharedPCH.UnrealEd.Project.ValApi.Cpp20.h"
-/Fp"..\Intermediate\Build\Win64\x64\UnrealEditor\Development\UnrealEd\SharedPCH.UnrealEd.Project.ValApi.Cpp20.h.pch"
-/Fo"F:\PAYDAYMODS\UE5\Projects\Personal\PAYDAY3 Source\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp.obj"
-/experimental:log "F:\PAYDAYMODS\UE5\Projects\Personal\PAYDAY3 Source\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp.sarif"
-/sourceDependencies "F:\PAYDAYMODS\UE5\Projects\Personal\PAYDAY3 Source\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp.dep.json"
-@"F:\PAYDAYMODS\UE5\Projects\Personal\PAYDAY3 Source\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\CrimeForge.Shared.rsp"
+"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp"
+/FI"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Intermediate\Build\Win64\x64\PAYDAY3Editor\Development\UnrealEd\SharedPCH.UnrealEd.Project.ValApi.Cpp20.h"
+/FI"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Definitions.CrimeForge.h"
+/Yu"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Intermediate\Build\Win64\x64\PAYDAY3Editor\Development\UnrealEd\SharedPCH.UnrealEd.Project.ValApi.Cpp20.h"
+/Fp"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Intermediate\Build\Win64\x64\PAYDAY3Editor\Development\UnrealEd\SharedPCH.UnrealEd.Project.ValApi.Cpp20.h.pch"
+/Fo"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp.obj"
+/experimental:log "C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp.sarif"
+/sourceDependencies "C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\Module.CrimeForge.cpp.dep.json"
+@"C:\Users\Elijah\Documents\GitHub\PD3-Modkit\Plugins\CrimeForge\Intermediate\Build\Win64\x64\UnrealEditor\Development\CrimeForge\CrimeForge.Shared.rsp"
 /d2ssa-cfg-question-
 /Zc:inline
 /nologo

@@ -1,4 +1,4 @@
-﻿#include "CrimeForgeModEntry.h"
+#include "CrimeForgeModEntry.h"
 #include "CrimeForge.h"
 #include "CrimeForgeSettings.h"
 #include "CrimeForgeStyle.h"
@@ -2764,6 +2764,44 @@ namespace
 		return Newest;
 	}
 
+	FString GetCrimeForgeAutomationSourceFingerprint(
+		const FString& ScriptDir)
+	{
+		/*
+		 * Do not rely on timestamps alone. Plugin files may be copied from an
+		 * archive or Git checkout with timestamps older than a previously built
+		 * AutomationTool DLL. Fingerprint the actual source contents so an updated
+		 * PackagePlugin.cs always invalidates the installed automation assembly.
+		 */
+		const TCHAR* SourceFiles[] =
+		{
+			TEXT("CrimeForge.Automation.csproj"),
+			TEXT("CrimeForge.Automation.csproj.props"),
+			TEXT("PackagePlugin.cs")
+		};
+
+		uint32 Fingerprint = 2166136261u;
+
+		for (const TCHAR* SourceFile : SourceFiles)
+		{
+			const FString FullPath =
+				FPaths::Combine(ScriptDir, SourceFile);
+
+			FString Contents;
+			if (!FFileHelper::LoadFileToString(Contents, *FullPath))
+			{
+				continue;
+			}
+
+			Fingerprint =
+				(Fingerprint ^ GetTypeHash(FString(SourceFile))) * 16777619u;
+			Fingerprint =
+				(Fingerprint ^ GetTypeHash(Contents)) * 16777619u;
+		}
+
+		return FString::Printf(TEXT("%08X"), Fingerprint);
+	}
+
 	bool RunBatchFileAndCapture(
 		const FString& BatchFile,
 		const FString& Arguments,
@@ -2980,6 +3018,9 @@ namespace
 
 		const FDateTime NewestSourceTimestamp =
 			GetNewestCrimeForgeAutomationSourceTimestamp(ScriptDir);
+		const FString SourceFingerprint =
+			GetCrimeForgeAutomationSourceFingerprint(ScriptDir);
+
 		const FDateTime DllTimestamp =
 			FileManager.FileExists(*AutomationDll)
 				? FileManager.GetTimeStamp(*AutomationDll)
@@ -2989,9 +3030,20 @@ namespace
 				? FileManager.GetTimeStamp(*MarkerFile)
 				: FDateTime::MinValue();
 
+		FString MarkerContents;
+		const bool bMarkerLoaded =
+			FileManager.FileExists(*MarkerFile) &&
+			FFileHelper::LoadFileToString(MarkerContents, *MarkerFile);
+		const bool bFingerprintMatches =
+			bMarkerLoaded &&
+			MarkerContents.Contains(
+				TEXT("SourceFingerprint=") + SourceFingerprint,
+				ESearchCase::CaseSensitive);
+
 		const bool bBootstrapRequired =
 			!FileManager.FileExists(*AutomationDll) ||
 			!FileManager.FileExists(*MarkerFile) ||
+			!bFingerprintMatches ||
 			DllTimestamp < NewestSourceTimestamp ||
 			MarkerTimestamp < NewestSourceTimestamp;
 
@@ -3028,6 +3080,31 @@ namespace
 			TEXT(
 				"CrimeForge AutomationTool bootstrap is missing or stale. "
 				"Running one-time setup for the current engine..."));
+
+		/*
+		 * Remove stale outputs before invoking UAT. This prevents MSBuild/UAT from
+		 * reusing an old CrimeForge.Automation assembly or obj cache after a plugin
+		 * update, especially when archive timestamps make the old DLL look newer.
+		 */
+		const FString AutomationOutputDir = FPaths::GetPath(AutomationDll);
+		FileManager.Delete(*AutomationDll, false, true, true);
+		FileManager.Delete(
+			*FPaths::Combine(AutomationOutputDir, TEXT("CrimeForge.Automation.pdb")),
+			false, true, true);
+		FileManager.Delete(
+			*FPaths::Combine(AutomationOutputDir, TEXT("CrimeForge.Automation.deps.json")),
+			false, true, true);
+
+		FileManager.DeleteDirectory(
+			*FPaths::Combine(ScriptDir, TEXT("obj")),
+			false,
+			true);
+
+		FileManager.Delete(
+			*FPaths::Combine(
+				FPaths::ProjectIntermediateDir(),
+				TEXT("ScriptModules/CrimeForge.Automation.json")),
+			false, true, true);
 
 		const FString BootstrapArguments =
 			FString::Printf(
@@ -3096,16 +3173,17 @@ namespace
 			*FPaths::GetPath(MarkerFile),
 			true);
 
-		const FString MarkerContents =
+		const FString NewMarkerContents =
 			FString::Printf(
 				TEXT(
-					"Engine=%s\nScriptDir=%s\nAutomationDll=%s\n"),
+					"Engine=%s\nScriptDir=%s\nAutomationDll=%s\nSourceFingerprint=%s\n"),
 				*FPaths::ConvertRelativePathToFull(FPaths::EngineDir()),
 				*ScriptDir,
-				*AutomationDll);
+				*AutomationDll,
+				*SourceFingerprint);
 
 		if (!FFileHelper::SaveStringToFile(
-				MarkerContents,
+				NewMarkerContents,
 				*MarkerFile))
 		{
 			UE_LOG(

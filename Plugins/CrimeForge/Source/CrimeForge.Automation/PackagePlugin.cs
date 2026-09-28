@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -836,7 +836,8 @@ namespace CrimeForge.Automation
 				AdditionalCookerOptions: "-AllowUncookedAssetReferences " +
 					"-ini:Editor:[CookSettings]:CookContentMissingSeverity=Warning " +
 					"-ini:Engine:[Core.Log]:LogAkAudio=Fatal " +
-					"-ini:Engine:[Core.Log]:LogAudiokineticTools=Fatal",
+					"-ini:Engine:[Core.Log]:LogAudiokineticTools=Fatal " +
+					"-ini:Engine:[Core.Log]:LogBinkMoviePlayer=Fatal ",
 				UnversionedCookedContent: true,
 				SkipCookingEditorContent: true,
 				DLCIncludeEngineContent: false,
@@ -1615,6 +1616,7 @@ namespace CrimeForge.Automation
 				+ "-ini:Editor:[CookSettings]:CookContentMissingSeverity=Warning "
 				+ "-ini:Engine:[Core.Log]:LogAkAudio=Fatal "
 				+ "-ini:Engine:[Core.Log]:LogAudiokineticTools=Fatal "
+				+ "-ini:Engine:[Core.Log]:LogBinkMoviePlayer=Fatal "
 				// PASS 2 deliberately does not start Wwise's platform resource cooker.
 				// Its generated BNK/WEM payload is staged into PASS 1 by CrimeForge.
 				// Wwise 2023.1 otherwise logs GetCookerForPlatform as Error while the

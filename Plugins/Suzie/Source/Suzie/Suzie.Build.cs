@@ -15,6 +15,7 @@ public class Suzie : ModuleRules
 			new string[]
 			{
 				"Core",
+				"GameplayTags",
 			}
 			);
 
