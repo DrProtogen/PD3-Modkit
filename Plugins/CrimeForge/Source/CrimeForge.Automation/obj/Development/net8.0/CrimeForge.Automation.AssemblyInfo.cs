@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CrimeForge.Automation")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Development")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+fac8c957d1f8c3fe6829f484094023451b37ecd8")]
 [assembly: System.Reflection.AssemblyProductAttribute("CrimeForge.Automation")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CrimeForge.Automation")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
