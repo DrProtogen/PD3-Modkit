@@ -30648,7 +30648,31 @@
 			"Type": "UFS"
 		},
 		{
+			"Path": "$(ProjectDir)/Mods/Creations/Creations.uplugin",
+			"Type": "UFS"
+		},
+		{
 			"Path": "$(ProjectDir)/Mods/PDML/PDML.uplugin",
+			"Type": "UFS"
+		},
+		{
+			"Path": "$(ProjectDir)/Mods/ProofOfConceptHeist/ProofOfConceptHeist.uplugin",
+			"Type": "UFS"
+		},
+		{
+			"Path": "$(ProjectDir)/Mods/Prototype/Prototype.uplugin",
+			"Type": "UFS"
+		},
+		{
+			"Path": "$(ProjectDir)/Mods/ProvingGrounds/ProvingGrounds.uplugin",
+			"Type": "UFS"
+		},
+		{
+			"Path": "$(ProjectDir)/Mods/TutorialHeist/TutorialHeist.uplugin",
+			"Type": "UFS"
+		},
+		{
+			"Path": "$(ProjectDir)/Mods/testmod/testmod.uplugin",
 			"Type": "UFS"
 		},
 		{
@@ -30842,6 +30866,7 @@
 		"ControlRig",
 		"ControlRigModules",
 		"ControlRigSpline",
+		"Creations",
 		"CrimeForge",
 		"CryptoKeys",
 		"CurveEditorTools",
@@ -30934,8 +30959,11 @@
 		"PluginUtils",
 		"PortableObjectFileDataSource",
 		"ProceduralMeshComponent",
+		"ProofOfConceptHeist",
 		"PropertyAccessEditor",
 		"PropertyAccessNode",
+		"Prototype",
+		"ProvingGrounds",
 		"ProxyLODPlugin",
 		"PythonScriptPlugin",
 		"RenderDocPlugin",
@@ -30964,6 +30992,7 @@
 		"TextureFormatOodle",
 		"ToolPresets",
 		"TraceUtilities",
+		"TutorialHeist",
 		"UMGWidgetPreview",
 		"UObjectPlugin",
 		"USDCore",
@@ -30984,7 +31013,8 @@
 		"WorldPartitionHLODUtilities",
 		"Wwise",
 		"XGEController",
-		"XInputDevice"
+		"XInputDevice",
+		"testmod"
 	],
 	"AdditionalProperties": [
 		{
