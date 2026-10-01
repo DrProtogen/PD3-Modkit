@@ -3,6 +3,7 @@
 #include "CrimeForgeCommands.h"
 #include "CrimeForgeSettings.h"
 #include "CrimeForgeWidget.h"
+#include "PD3ModkitUpdater.h"
 #include "ContentBrowserModule.h"
 #include "ISettingsModule.h"
 #include "ISettingsSection.h"
@@ -48,6 +49,11 @@ void FCrimeForgeModule::StartupModule() {
         }),
         FCanExecuteAction());
     FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
+
+    // Start the delayed project update check. This compares the local Git checkout
+    // against the official PD3-Modkit remote without modifying the working tree.
+    FPD3ModkitUpdater::Initialize();
+
     
     // Register CrimeForge in the editor's Window menu instead of File.
     {
@@ -66,6 +72,31 @@ void FCrimeForgeModule::StartupModule() {
             Section.AddMenuEntryWithCommandList(
                 FCrimeForgeCommands::Get().OpenPluginWindow,
                 PluginCommands);
+        }
+    }
+
+    // Add a manual updater action to the editor Help menu.
+    {
+        FToolMenuOwnerScoped OwnerScoped(this);
+
+        UToolMenu* HelpMenu = UToolMenus::Get()->ExtendMenu(
+            TEXT("LevelEditor.MainMenu.Help"));
+
+        if (HelpMenu)
+        {
+            FToolMenuSection& Section = HelpMenu->FindOrAddSection(
+                TEXT("PD3Modkit"),
+                LOCTEXT("PD3ModkitHelpSection", "PD3 MODKIT"));
+
+            Section.AddMenuEntry(
+                TEXT("PD3Modkit_CheckForUpdates"),
+                LOCTEXT("PD3ModkitCheckForUpdates", "Check for Modkit Updates"),
+                LOCTEXT("PD3ModkitCheckForUpdatesTooltip", "Check GitHub for a newer version of the PD3 Modkit."),
+                FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([]()
+                {
+                    FPD3ModkitUpdater::CheckForUpdates(true);
+                })));
         }
     }
 
@@ -98,6 +129,8 @@ void FCrimeForgeModule::StartupModule() {
 }
 
 void FCrimeForgeModule::ShutdownModule() {
+    FPD3ModkitUpdater::Shutdown();
+
     if (UObjectInitialized()) {
         UnregisterSettings();
     }

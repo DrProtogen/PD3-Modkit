@@ -1,6 +1,6 @@
 # PD3-Modkit
 
-PD3-Modkit is a PAYDAY 3 modding project built around a custom **UE5-PD3 Editor** and **Suzie**.
+PD3-Modkit is a PAYDAY 3 modding project built around a custom **UE5-PD3 Editor** and **Suzie**!
 
 The custom editor is designed to work with PAYDAY 3 cooked content directly from the user's installed game, while Suzie reconstructs PAYDAY 3 classes and reflection data from a locally generated Jmap.
 

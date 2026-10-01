@@ -1,0 +1,23 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\plugins\\crimeforge\\source\\crimeforge\\private\\crimeforgestyle.cpp",
+        "ProvidedModule": "",
+        "PCH": "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\intermediate\\build\\win64\\x64\\payday3editor\\development\\unrealed\\sharedpch.unrealed.project.valapi.cpp20.h.pch",
+        "Includes": [
+            "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\plugins\\crimeforge\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\crimeforge\\definitions.crimeforge.h",
+            "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\plugins\\crimeforge\\source\\crimeforge\\public\\crimeforgestyle.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\interfaces\\ipluginmanager.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\plugindescriptor.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\custombuildsteps.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\localizationdescriptor.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\moduledescriptor.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\plugindisalloweddescriptor.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\pluginreferencedescriptor.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\projects\\public\\versescope.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\runtime\\slatecore\\public\\styling\\slatestyleregistry.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

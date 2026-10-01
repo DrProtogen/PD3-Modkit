@@ -1,0 +1,26 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\plugins\\crimeforge\\source\\crimeforge\\private\\sexternalimage.cpp",
+        "ProvidedModule": "",
+        "PCH": "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\intermediate\\build\\win64\\x64\\payday3editor\\development\\unrealed\\sharedpch.unrealed.project.valapi.cpp20.h.pch",
+        "Includes": [
+            "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\plugins\\crimeforge\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\crimeforge\\definitions.crimeforge.h",
+            "f:\\paydaymods\\ue5\\projects\\pd3-modkit-main\\pd3-modkit-main\\plugins\\crimeforge\\source\\crimeforge\\private\\sexternalimage.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\externalimagepicker\\public\\iexternalimagepickermodule.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\sourcecontroloperations.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\isourcecontrolchangelist.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\sourcecontroloperationbase.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\isourcecontroloperation.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\sourcecontrolresultinfo.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\sourcecontrolpreferences.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\intermediate\\build\\win64\\unrealeditor\\inc\\sourcecontrol\\uht\\sourcecontrolpreferences.generated.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\isourcecontrolprovider.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\isourcecontrolchangeliststate.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\isourcecontrolstate.h",
+            "g:\\program files\\epic games\\ue5_pd3\\engine\\source\\developer\\sourcecontrol\\public\\isourcecontrolmodule.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

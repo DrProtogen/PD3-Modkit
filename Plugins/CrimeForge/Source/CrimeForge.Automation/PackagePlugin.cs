@@ -234,6 +234,7 @@ namespace CrimeForge.Automation
 		private const string DesktopGameExecutableName = "PAYDAY3.exe";
 		private const string WinGDKGameExecutableName = "PAYDAY3-WinGDK-Shipping.exe";
 		private const string WinGDKClientExecutableName = "PAYDAY3Client-WinGDK-Shipping.exe";
+		private const string WinGDKLaunchHelperExecutableName = "GameLaunchHelper.exe";
 		private const string SteamAppId = "1272080";
 		private const string ModDeployRoot = "Mods";
 		private const string DefaultBaseReleaseVersion = "SOMERELEASE1";
@@ -650,6 +651,34 @@ namespace CrimeForge.Automation
 			);
 		}
 
+		private static void LaunchMicrosoftStorePAYDAY3(
+			string gameDirectory)
+		{
+			var layout = RequirePAYDAY3GameLayout(gameDirectory);
+			var launchHelperPath = Path.Combine(
+				layout.InstallDirectory,
+				WinGDKLaunchHelperExecutableName);
+
+			if (!File.Exists(launchHelperPath))
+			{
+				throw new AutomationException(
+					"Microsoft Store/Xbox PAYDAY 3 launch helper was not found at '{0}'. CrimeForge intentionally does not launch the WinGDK shipping executable directly.",
+					launchHelperPath);
+			}
+
+			LogInformation(
+				"Launching PAYDAY 3 through Microsoft Store/Xbox GameLaunchHelper: {0}",
+				launchHelperPath);
+
+			Process.Start(
+				new ProcessStartInfo(launchHelperPath)
+				{
+					UseShellExecute = true,
+					WorkingDirectory = layout.InstallDirectory
+				}
+			);
+		}
+
 		private static void LaunchPAYDAY3(
 			PD3Params pd3Params)
 		{
@@ -702,33 +731,7 @@ namespace CrimeForge.Automation
 
 			if (launchType == "MicrosoftStore")
 			{
-				var aumid =
-					FindMicrosoftStorePAYDAY3Aumid();
-
-				if (!string.IsNullOrWhiteSpace(aumid))
-				{
-					LogInformation(
-						"Launching PAYDAY 3 through Microsoft Store/Xbox app identity: {0}",
-						aumid
-					);
-
-					Process.Start(
-						new ProcessStartInfo(
-							"explorer.exe",
-							$"shell:AppsFolder\\\\{aumid}")
-						{
-							UseShellExecute = true
-						}
-					);
-
-					return;
-				}
-
-				LogWarning(
-					"PAYDAY 3 Microsoft Store/Xbox AUMID could not be detected. Falling back to the WinGDK executable resolved from GameDir."
-				);
-
-				LaunchDirectPAYDAY3Executable(
+				LaunchMicrosoftStorePAYDAY3(
 					pd3Params.GameDirectory);
 				return;
 			}
