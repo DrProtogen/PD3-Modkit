@@ -138,7 +138,7 @@ namespace
         GSuzieRetailABIAuditStats = FSuzieRetailABIAuditStats{};
 
         GSuzieRetailABIReportLines.Reset();
-        GSuzieRetailABIReportLines.Add(TEXT("Suzie PAYDAY 3 Cooked Serialization ABI Report (v4.6.4)"));
+        GSuzieRetailABIReportLines.Add(TEXT("Suzie PAYDAY 3 Cooked Serialization ABI Report (v4.6.5)"));
         GSuzieRetailABIReportLines.Add(TEXT("=============================================="));
         GSuzieRetailABIReportLines.Add(TEXT(""));
         GSuzieRetailABIReportLines.Add(TEXT("This report compares the schema seen by cooked unversioned serialization."));
@@ -147,7 +147,7 @@ namespace
         GSuzieRetailABIReportLines.Add(TEXT(""));
 
         GSuzieEditorReflectionReportLines.Reset();
-        GSuzieEditorReflectionReportLines.Add(TEXT("Suzie PAYDAY 3 Editor Reflection Differences (v4.6.4)"));
+        GSuzieEditorReflectionReportLines.Add(TEXT("Suzie PAYDAY 3 Editor Reflection Differences (v4.6.5)"));
         GSuzieEditorReflectionReportLines.Add(TEXT("============================================="));
         GSuzieEditorReflectionReportLines.Add(TEXT(""));
         GSuzieEditorReflectionReportLines.Add(TEXT("This report compares RAW direct editor PropertyLink reflection against retail."));
@@ -161,7 +161,7 @@ namespace
         GSuzieNativeLocalLayoutLines.Reset();
         GSuzieAlignmentOnlyLayoutLines.Reset();
 
-        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Suzie PAYDAY 3 Native Memory Layout Diagnostics (v4.6.4)"));
+        GSuzieNativeMemoryLayoutReportLines.Add(TEXT("Suzie PAYDAY 3 Native Memory Layout Diagnostics (v4.6.5)"));
         GSuzieNativeMemoryLayoutReportLines.Add(TEXT("======================================================"));
         GSuzieNativeMemoryLayoutReportLines.Add(TEXT(""));
         GSuzieNativeMemoryLayoutReportLines.Add(TEXT("DIAGNOSTIC ONLY: a physical size/alignment difference does NOT imply cooked asset incompatibility."));
@@ -3022,25 +3022,37 @@ static void ApplyGeneratedUHTEditorPropertyFlags(FProperty* Property)
         return;
     }
 
-    // UE4SS generated UHT headers expose reconstructed native instance fields as
-    // BlueprintReadWrite + EditAnywhere, even when the cooked runtime reflection
-    // reports BlueprintReadOnly/EditConst or omits the editor-facing specifiers.
+    // UE4SS generated UHT headers expose reconstructed native fields as
+    // BlueprintReadWrite even when cooked runtime reflection reports
+    // BlueprintReadOnly/EditConst or omits the editor-facing specifiers.
     //
-    // These flags only control editor / Blueprint access. They do not affect the
-    // property's serialized type, order, ArrayDim, offset, CPF_EditorOnly filtering,
-    // Config/Transient/SaveGame behaviour, replication flags, or native layout.
-    // Keep every serialization-relevant retail flag intact and normalize only the
-    // editor-facing access bits so dynamically reconstructed classes behave like the
-    // UE4SS UHT SDK when authoring mods.
+    // Blueprint access and persistent editor authoring are intentionally handled
+    // separately here. A retail CPF_Transient/CPF_SkipSerialization field may be
+    // perfectly valid to read/write at runtime from Blueprint, but presenting it as
+    // EditAnywhere is misleading because an authored value cannot survive a package
+    // save/reload. Keep every serialization-relevant retail flag intact and only
+    // expose CPF_Edit for properties that can actually persist.
+    Property->ClearPropertyFlags(CPF_BlueprintReadOnly);
+    Property->SetPropertyFlags(CPF_BlueprintVisible);
+
+    const bool bIsNonPersistent = Property->HasAnyPropertyFlags(
+        CPF_Transient
+        | CPF_SkipSerialization);
+
+    if (bIsNonPersistent)
+    {
+        // Do not make transient/non-serialized fields appear authorable in Details.
+        // They remain BlueprintVisible + writable for runtime Get/Set usage.
+        Property->ClearPropertyFlags(CPF_Edit);
+        return;
+    }
+
     Property->ClearPropertyFlags(
-        CPF_BlueprintReadOnly
-        | CPF_EditConst
+        CPF_EditConst
         | CPF_DisableEditOnInstance
         | CPF_DisableEditOnTemplate);
 
-    Property->SetPropertyFlags(
-        CPF_BlueprintVisible
-        | CPF_Edit);
+    Property->SetPropertyFlags(CPF_Edit);
 }
 
 UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Context, const FString& ClassPath)
@@ -3089,9 +3101,10 @@ UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Co
     // that UE4SS exposes as writable can arrive here as BlueprintReadOnly/EditConst.
     //
     // This is intentionally generic. No Starbreeze class/property names are special-
-    // cased. Every dynamically reconstructed native instance field gets the same
-    // BlueprintReadWrite + EditAnywhere editor view while retaining its retail
-    // Config/Transient/SaveGame/replication/serialization flags and native layout.
+    // cased. Every dynamically reconstructed native instance field is Blueprint
+    // writable, while EditAnywhere is only exposed for fields whose retail flags
+    // allow the authored value to persist. Config/Transient/SaveGame/replication/
+    // serialization flags and native layout remain authoritative.
     const TArray<TSharedPtr<FJsonValue>>& Properties = ClassDefinition->GetArrayField(TEXT("properties"));
     for (const TSharedPtr<FJsonValue>& PropertyDescriptor : Properties)
     {
@@ -3102,6 +3115,29 @@ UClass* FSuziePluginModule::FindOrCreateClass(FDynamicClassGenerationContext& Co
         if (FProperty* CreatedProperty = AddPropertyToStruct(Context, NewClass, PropertyObject, CPF_None))
         {
             ApplyGeneratedUHTEditorPropertyFlags(CreatedProperty);
+
+            // Suzie appends these properties to a native UClass after the engine's
+            // compiled-in/UHT registration path has already run. A derived Blueprint
+            // therefore cannot infer, from native constructor code, that these fields
+            // must be initialized from the native parent CDO. Without this bit the
+            // Blueprint CDO can keep the raw value produced by construction instead
+            // (for example NAME_None or enum value 0), and
+            // UBlueprintGeneratedClass::UpdateCustomPropertyListForPostConstruction()
+            // then records that raw value as a real child override.
+            //
+            // CPF_ForcePostConstructLink exists specifically for native UCLASS
+            // properties which must participate in post-construction initialization
+            // for derived Blueprints regardless of the native constructor value. Use
+            // the stable UE5 flag bit directly so this source remains compatible with
+            // the PAYDAY UE 5.5 branch even when the symbolic enum name is not exposed
+            // by a particular minor-version header.
+            //
+            // This is editor/default-initialization behaviour only. It does not alter
+            // the retail cooked serialization schema, property order, type or offset.
+            constexpr EPropertyFlags SuzieForcePostConstructLink =
+                static_cast<EPropertyFlags>(0x2000000000000000ull);
+            CreatedProperty->SetPropertyFlags(SuzieForcePostConstructLink);
+
             // Build a normal safe Unreal layout first. After the whole class has
             // linked, TryApplyJmapStructLayout may replace these offsets atomically
             // if every reconstructed property fits the retail layout.
@@ -3295,8 +3331,9 @@ UScriptStruct* FSuziePluginModule::FindOrCreateScriptStruct(FDynamicClassGenerat
     // CPF_EditorOnly filtering, not on Blueprint/editor mutability flags. Retail
     // Starbreeze structs commonly mark members BlueprintReadOnly/EditConst because
     // the shipping game constructs them through native code. Suzie's editor-facing
-    // reflection needs those same members writable so UK2Node_MakeStruct and
-    // UK2Node_SetFieldsInStruct can expose their pins.
+    // reflection needs those same members Blueprint writable so UK2Node_MakeStruct and
+    // UK2Node_SetFieldsInStruct can expose their pins. Transient/non-serialized members
+    // intentionally remain non-editable in persistent Details views.
     //
     // Keep BuildProperty authoritative to the retail jmap, then apply only the
     // editor usability override after the property has been reconstructed.
@@ -4685,11 +4722,22 @@ void FSuziePluginModule::PolymorphicClassConstructorInvocationHelper(const FObje
         // TObjectPtr<UObject> ClassDefaultObject member in a conditional
         // expression. MSVC 17.14+ treats that ternary as ambiguous.
         const UObject* ReconstructedDynamicCDO = TopLevelDynamicClass->GetDefaultObject(false);
+
+        // Do not use FObjectInitializer's transient archetype as the authoritative
+        // source for a Blueprint CDO. During Blueprint compilation/reinstancing that
+        // archetype can be a SKEL_/REINST_ CDO whose dynamically-added native fields
+        // have already fallen back to zero/default memory. The semantic parent of a
+        // Blueprint CDO is its immediate superclass CDO, and that is the object Unreal
+        // itself uses for inherited class defaults.
+        const UClass* ConstructingClass = ObjectInitializer.GetClass();
+        const UClass* ImmediateSuperClass = ConstructingClass ? ConstructingClass->GetSuperClass() : nullptr;
+        const UObject* ImmediateSuperCDO = ImmediateSuperClass ? ImmediateSuperClass->GetDefaultObject(false) : nullptr;
+
         const UObject* DerivedCDODefaultSource =
-            InitializationArchetype != nullptr
-            && InitializationArchetype != ConstructedObject
-            && InitializationArchetype->GetClass()->IsChildOf(TopLevelDynamicClass)
-                ? InitializationArchetype
+            ImmediateSuperCDO != nullptr
+            && ImmediateSuperCDO != ConstructedObject
+            && ImmediateSuperCDO->GetClass()->IsChildOf(TopLevelDynamicClass)
+                ? ImmediateSuperCDO
                 : ReconstructedDynamicCDO;
 
         CopySuzieDynamicDefaultsFromObject(ConstructedObject, DerivedCDODefaultSource, TopLevelDynamicClass);
