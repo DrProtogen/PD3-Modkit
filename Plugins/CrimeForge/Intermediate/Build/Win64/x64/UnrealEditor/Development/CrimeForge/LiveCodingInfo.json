@@ -1,0 +1,23 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.CrimeForge.cpp.obj": [
+			"CrimeForge.init.gen.cpp.obj",
+			"CrimeForgeSettings.gen.cpp.obj",
+			"ModMetadataObject.gen.cpp.obj",
+			"PerModuleInline.gen.cpp.obj",
+			"CrimeForge.cpp.obj",
+			"CrimeForgeCommands.cpp.obj",
+			"CrimeForgeModEntry.cpp.obj",
+			"CrimeForgeModEntryList.cpp.obj",
+			"CrimeForgeSettings.cpp.obj",
+			"CrimeForgeStyle.cpp.obj",
+			"CrimeForgeWidget.cpp.obj",
+			"LegacyModImporter.cpp.obj",
+			"ModMetadataObject.cpp.obj",
+			"ModWizardDefinition.cpp.obj",
+			"PD3ModkitUpdater.cpp.obj",
+			"SExternalImage.cpp.obj"
+		]
+	}
+}

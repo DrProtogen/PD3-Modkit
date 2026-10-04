@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 	<PropertyGroup>
-		<EngineDir Condition="'$(EngineDir)' == ''">C:\Program Files\UE5_PD3\Engine</EngineDir>
+		<EngineDir Condition="'$(EngineDir)' == ''">E:\EpicGames\UnrealEngine-PD3Compatibility\Engine</EngineDir>
 	</PropertyGroup>
 </Project>

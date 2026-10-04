@@ -2713,6 +2713,49 @@ namespace CrimeForge.Automation
 			);
 		}
 
+		private static void CopyWindowsPaksToWinGDK(string pluginDirectory)
+		{
+			var paksDirectory = Path.Combine(pluginDirectory, "Content", "Paks");
+			var windowsDirectory = Path.Combine(paksDirectory, "Windows");
+			if (!Directory.Exists(windowsDirectory))
+			{
+				return;
+			}
+
+			var winGDKDirectory = Path.Combine(paksDirectory, "WinGDK");
+
+			// Replace the previous copy so removed or renamed containers cannot
+			// survive a subsequent packaging run. Keep Windows and all file names.
+			if (Directory.Exists(winGDKDirectory))
+			{
+				Directory.Delete(winGDKDirectory, true);
+			}
+			Directory.CreateDirectory(winGDKDirectory);
+
+			foreach (var directory in Directory.GetDirectories(
+				windowsDirectory, "*", SearchOption.AllDirectories))
+			{
+				Directory.CreateDirectory(Path.Combine(
+					winGDKDirectory,
+					Path.GetRelativePath(windowsDirectory, directory)));
+			}
+
+			var files = Directory.GetFiles(
+				windowsDirectory, "*", SearchOption.AllDirectories);
+			foreach (var file in files)
+			{
+				File.Copy(
+					file,
+					Path.Combine(winGDKDirectory, Path.GetRelativePath(windowsDirectory, file)),
+					true);
+			}
+
+			LogInformation(
+				"Copied {0} file(s) from Content/Paks/Windows to Content/Paks/WinGDK for {1}.",
+				files.Length,
+				Path.GetFileName(pluginDirectory));
+		}
+
 		private static void ArchiveWorkingPlugin(
 			ProjectParams dlcParams,
 			string workingPluginDirectory,
@@ -2941,6 +2984,8 @@ namespace CrimeForge.Automation
 						projectParams.DLCFile
 							.GetFileNameWithoutAnyExtensions()
 					);
+
+					CopyWindowsPaksToWinGDK(stagedPluginDirectory);
 				}
 
 				result.SetPhase("Archive mod");
@@ -3390,6 +3435,9 @@ namespace CrimeForge.Automation
 							break;
 					}
 				}
+
+				result.SetPhase("Prepare Windows and WinGDK folders");
+				CopyWindowsPaksToWinGDK(workingPluginDirectory);
 
 				// Archive/deploy the PASS 1 plugin shell after PASS 2's
 				// pak/utoc/ucas have been injected into Content/Paks.

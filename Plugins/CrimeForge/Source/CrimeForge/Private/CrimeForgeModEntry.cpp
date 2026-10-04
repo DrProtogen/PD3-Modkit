@@ -4714,11 +4714,15 @@ void SCrimeForgeModEntry::PackageMod(const TArray<TSharedPtr<SCrimeForgeModEntry
     // original single-stage DLC path.
     const int32 ChunkId = GetModChunkIdIfExternalContentExists(*Mod);
 
+    // UAT runs with a different working directory from the editor. Resolve
+    // this directory here so the manifest, result JSON, and log use the same
+    // absolute paths in both processes.
     const FString ResultDirectory =
-        FPaths::Combine(
-            FPaths::ProjectSavedDir(),
-            TEXT("CrimeForge"),
-            TEXT("Results"));
+        FPaths::ConvertRelativePathToFull(
+            FPaths::Combine(
+                FPaths::ProjectSavedDir(),
+                TEXT("CrimeForge"),
+                TEXT("Results")));
 
     IFileManager::Get().MakeDirectory(
         *ResultDirectory,
