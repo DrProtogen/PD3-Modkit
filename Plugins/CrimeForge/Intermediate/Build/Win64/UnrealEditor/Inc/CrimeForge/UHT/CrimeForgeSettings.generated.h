@@ -14,7 +14,7 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 #endif
 #define CRIMEFORGE_CrimeForgeSettings_generated_h
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_INCLASS_NO_PURE_DECLS \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_INCLASS_NO_PURE_DECLS \
 private: \
 	static void StaticRegisterNativesUCrimeForgeSettings(); \
 	friend struct Z_Construct_UClass_UCrimeForgeSettings_Statics; \
@@ -25,7 +25,7 @@ public: \
 
 
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_ENHANCED_CONSTRUCTORS \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_ENHANCED_CONSTRUCTORS \
 	/** Standard constructor, called after all reflected properties have been initialized */ \
 	NO_API UCrimeForgeSettings(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get()); \
 private: \
@@ -39,12 +39,12 @@ public: \
 	NO_API virtual ~UCrimeForgeSettings();
 
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_21_PROLOG
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_GENERATED_BODY \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_21_PROLOG
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_GENERATED_BODY \
 PRAGMA_DISABLE_DEPRECATION_WARNINGS \
 public: \
-	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_INCLASS_NO_PURE_DECLS \
-	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_ENHANCED_CONSTRUCTORS \
+	FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_INCLASS_NO_PURE_DECLS \
+	FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h_24_ENHANCED_CONSTRUCTORS \
 private: \
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
@@ -52,7 +52,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 template<> CRIMEFORGE_API UClass* StaticClass<class UCrimeForgeSettings>();
 
 #undef CURRENT_FILE_ID
-#define CURRENT_FILE_ID FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h
+#define CURRENT_FILE_ID FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_CrimeForgeSettings_h
 
 
 #define FOREACH_ENUM_ECRIMEFORGESTARTGAMETYPE(op) \
