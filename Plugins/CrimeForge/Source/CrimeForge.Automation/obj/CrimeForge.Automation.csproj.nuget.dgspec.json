@@ -1,23 +1,23 @@
 {
   "format": 1,
   "restore": {
-    "F:\\PAYDAYMODS\\UE5\\Projects\\Personal\\PAYDAY3 Source\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj": {}
+    "C:\\Users\\Elijah\\Documents\\GitHub\\PD3-Modkit\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj": {}
   },
   "projects": {
-    "F:\\PAYDAYMODS\\UE5\\Projects\\Personal\\PAYDAY3 Source\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj": {
+    "C:\\Users\\Elijah\\Documents\\GitHub\\PD3-Modkit\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "F:\\PAYDAYMODS\\UE5\\Projects\\Personal\\PAYDAY3 Source\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj",
+        "projectUniqueName": "C:\\Users\\Elijah\\Documents\\GitHub\\PD3-Modkit\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj",
         "projectName": "CrimeForge.Automation",
-        "projectPath": "F:\\PAYDAYMODS\\UE5\\Projects\\Personal\\PAYDAY3 Source\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj",
-        "packagesPath": "C:\\Users\\Nwali\\.nuget\\packages\\",
-        "outputPath": "F:\\PAYDAYMODS\\UE5\\Projects\\Personal\\PAYDAY3 Source\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\obj\\",
+        "projectPath": "C:\\Users\\Elijah\\Documents\\GitHub\\PD3-Modkit\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\CrimeForge.Automation.csproj",
+        "packagesPath": "C:\\Users\\Elijah\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\Elijah\\Documents\\GitHub\\PD3-Modkit\\Plugins\\CrimeForge\\Source\\CrimeForge.Automation\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
         ],
         "configFilePaths": [
-          "C:\\Users\\Nwali\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Users\\Elijah\\AppData\\Roaming\\NuGet\\NuGet.Config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
@@ -64,7 +64,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "E:\\EpicGames\\UnrealEngine-PD3Compatibility\\Engine\\Binaries\\ThirdParty\\DotNet\\8.0.300\\win-x64\\sdk\\8.0.300/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\UE5_PD3\\Engine\\Binaries\\ThirdParty\\DotNet\\8.0.300\\win-x64\\sdk\\8.0.300/PortableRuntimeIdentifierGraph.json"
         }
       }
     }

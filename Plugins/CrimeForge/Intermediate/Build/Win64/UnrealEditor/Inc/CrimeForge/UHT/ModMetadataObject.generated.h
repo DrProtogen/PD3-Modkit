@@ -14,14 +14,14 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 #endif
 #define CRIMEFORGE_ModMetadataObject_generated_h
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_19_GENERATED_BODY \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_19_GENERATED_BODY \
 	friend struct Z_Construct_UScriptStruct_FModDependencyDescriptorData_Statics; \
 	CRIMEFORGE_API static class UScriptStruct* StaticStruct();
 
 
 template<> CRIMEFORGE_API UScriptStruct* StaticStruct<struct FModDependencyDescriptorData>();
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_INCLASS_NO_PURE_DECLS \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_INCLASS_NO_PURE_DECLS \
 private: \
 	static void StaticRegisterNativesUModMetadataObject(); \
 	friend struct Z_Construct_UClass_UModMetadataObject_Statics; \
@@ -30,7 +30,7 @@ public: \
 	DECLARE_SERIALIZER(UModMetadataObject)
 
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_ENHANCED_CONSTRUCTORS \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_ENHANCED_CONSTRUCTORS \
 private: \
 	/** Private move- and copy-constructors, should never be used */ \
 	UModMetadataObject(UModMetadataObject&&); \
@@ -42,12 +42,12 @@ public: \
 	NO_API virtual ~UModMetadataObject();
 
 
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_58_PROLOG
-#define FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_GENERATED_BODY \
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_58_PROLOG
+#define FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_GENERATED_BODY \
 PRAGMA_DISABLE_DEPRECATION_WARNINGS \
 public: \
-	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_INCLASS_NO_PURE_DECLS \
-	FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_ENHANCED_CONSTRUCTORS \
+	FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_INCLASS_NO_PURE_DECLS \
+	FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h_62_ENHANCED_CONSTRUCTORS \
 public: \
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
@@ -55,7 +55,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 template<> CRIMEFORGE_API UClass* StaticClass<class UModMetadataObject>();
 
 #undef CURRENT_FILE_ID
-#define CURRENT_FILE_ID FID_PAYDAY3_Source_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h
+#define CURRENT_FILE_ID FID_Users_Elijah_Documents_GitHub_PD3_Modkit_Plugins_CrimeForge_Source_CrimeForge_Public_ModMetadataObject_h
 
 
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
