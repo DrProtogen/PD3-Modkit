@@ -62,6 +62,7 @@
 !*.pl
 !*.py
 !*.js
+!*.ps1
 !*.command
 
 # Other configuration and markup files
@@ -9124,3 +9125,5 @@ Binaries/Win64/EOSSDK-Win64-Shipping.dll
 
 *.jmap
 !Tools/**
+
+!Plugins/CrimeForge/Resources/*

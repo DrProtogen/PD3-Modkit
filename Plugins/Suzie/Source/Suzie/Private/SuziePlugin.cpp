@@ -3015,6 +3015,165 @@ static UScriptStruct::ICppStructOps* FindNearestAncestorCppStructOps(UScriptStru
 // so we do not need an explicit mutex to guard the access to it during class initialization
 static TMap<UClass*, FDynamicClassConstructionData> DynamicClassConstructionData;
 
+// UE 5.3+ GameplayEffects require every UGameplayEffectComponent default subobject to already
+// be present in UGameplayEffect::GEComponents when PostInitProperties runs. PAYDAY 3's native
+// constructors are not available in the modkit, so Suzie has to recreate that constructor-time
+// bookkeeping from the retail CDO data in the jmap.
+//
+// Keep this reflection-only so Suzie does not need a hard module dependency on GameplayAbilities.
+// The values are the exact retail object paths, in retail array order.
+static TMap<const UClass*, TArray<FString>> GSuziePreInitGameplayEffectComponentPaths;
+
+// UGameplayEffect::PostInitProperties also validates component compatibility against
+// constructor-time fields such as DurationPolicy. Suzie normally applies the retail CDO
+// property_values only after GetDefaultObject() returns, which is too late. Preserve the
+// retail enum value here and seed it before PostInitProperties runs.
+//
+// This is reflection-only for the same reason as GEComponents above: Suzie should not
+// require a hard GameplayAbilities dependency just to reconstruct PAYDAY 3 classes.
+static TMap<const UClass*, FString> GSuziePreInitGameplayEffectDurationPolicies;
+
+static void ApplySuziePreInitGameplayEffectDurationPolicy(
+    const FObjectInitializer& ObjectInitializer,
+    const UClass* DynamicClass)
+{
+    UObject* Object = ObjectInitializer.GetObj();
+    if (Object == nullptr || DynamicClass == nullptr || !Object->HasAnyFlags(RF_ClassDefaultObject))
+    {
+        return;
+    }
+
+    const FString* RetailDurationPolicy = GSuziePreInitGameplayEffectDurationPolicies.Find(DynamicClass);
+    if (RetailDurationPolicy == nullptr)
+    {
+        return;
+    }
+
+    FEnumProperty* DurationPolicyProperty =
+        FindFProperty<FEnumProperty>(Object->GetClass(), TEXT("DurationPolicy"));
+    if (DurationPolicyProperty == nullptr
+        || DurationPolicyProperty->GetEnum() == nullptr
+        || DurationPolicyProperty->GetUnderlyingProperty() == nullptr
+        || DurationPolicyProperty->GetEnum()->GetPathName() != TEXT("/Script/GameplayAbilities.EGameplayEffectDurationType"))
+    {
+        return;
+    }
+
+    UEnum* DurationPolicyEnum = DurationPolicyProperty->GetEnum();
+    const int32 EnumIndex = DurationPolicyEnum->GetIndexByNameString(
+        *RetailDurationPolicy,
+        EGetByNameFlags::None);
+    if (EnumIndex == INDEX_NONE)
+    {
+        UE_LOG(
+            LogSuzie,
+            Warning,
+            TEXT("Could not resolve constructor-time GameplayEffect DurationPolicy %s for %s"),
+            **RetailDurationPolicy,
+            *Object->GetPathName());
+        return;
+    }
+
+    void* DurationPolicyValuePtr =
+        DurationPolicyProperty->ContainerPtrToValuePtr<void>(Object);
+    DurationPolicyProperty->GetUnderlyingProperty()->SetIntPropertyValue(
+        DurationPolicyValuePtr,
+        DurationPolicyEnum->GetValueByIndex(EnumIndex));
+
+    UE_LOG(
+        LogSuzie,
+        VeryVerbose,
+        TEXT("Pre-initialized DurationPolicy for %s from retail jmap: %s"),
+        *Object->GetPathName(),
+        **RetailDurationPolicy);
+}
+
+static void ApplySuziePreInitGameplayEffectComponents(
+    const FObjectInitializer& ObjectInitializer,
+    const UClass* DynamicClass)
+{
+    UObject* Object = ObjectInitializer.GetObj();
+    if (Object == nullptr || DynamicClass == nullptr || !Object->HasAnyFlags(RF_ClassDefaultObject))
+    {
+        return;
+    }
+
+    const TArray<FString>* ComponentPaths = GSuziePreInitGameplayEffectComponentPaths.Find(DynamicClass);
+    if (ComponentPaths == nullptr)
+    {
+        return;
+    }
+
+    FArrayProperty* GEComponentsProperty = FindFProperty<FArrayProperty>(Object->GetClass(), TEXT("GEComponents"));
+    FObjectPropertyBase* ComponentObjectProperty = GEComponentsProperty
+        ? CastField<FObjectPropertyBase>(GEComponentsProperty->Inner)
+        : nullptr;
+
+    // Do not key this only on the property name. Verify that it is the GAS component array
+    // so another unrelated class with a GEComponents property cannot be modified accidentally.
+    if (GEComponentsProperty == nullptr
+        || ComponentObjectProperty == nullptr
+        || ComponentObjectProperty->PropertyClass == nullptr
+        || ComponentObjectProperty->PropertyClass->GetPathName() != TEXT("/Script/GameplayAbilities.GameplayEffectComponent"))
+    {
+        return;
+    }
+
+    void* ArrayValuePtr = GEComponentsProperty->ContainerPtrToValuePtr<void>(Object);
+    FScriptArrayHelper ArrayHelper(GEComponentsProperty, ArrayValuePtr);
+    ArrayHelper.Resize(ComponentPaths->Num());
+
+    int32 ResolvedCount = 0;
+    for (int32 Index = 0; Index < ComponentPaths->Num(); ++Index)
+    {
+        UObject* ComponentObject = StaticFindObject(
+            ComponentObjectProperty->PropertyClass,
+            nullptr,
+            *(*ComponentPaths)[Index]);
+
+        // The jmap path is the authoritative retail identity. As a fallback, resolve the
+        // leaf name directly below the CDO in case the object path has not entered the
+        // global lookup table yet while FObjectInitializer is still active.
+        if (ComponentObject == nullptr)
+        {
+            const FString& ComponentPath = (*ComponentPaths)[Index];
+            int32 NameSeparatorIndex = INDEX_NONE;
+            if (!ComponentPath.FindLastChar(TEXT(':'), NameSeparatorIndex))
+            {
+                ComponentPath.FindLastChar(TEXT('.'), NameSeparatorIndex);
+            }
+
+            const FString ObjectName = NameSeparatorIndex != INDEX_NONE
+                ? ComponentPath.Mid(NameSeparatorIndex + 1)
+                : ComponentPath;
+
+            ComponentObject = StaticFindObjectFast(
+                ComponentObjectProperty->PropertyClass,
+                Object,
+                FName(*ObjectName));
+        }
+
+        ComponentObjectProperty->SetObjectPropertyValue(ArrayHelper.GetRawPtr(Index), ComponentObject);
+        if (ComponentObject != nullptr)
+        {
+            ++ResolvedCount;
+        }
+        else
+        {
+            UE_LOG(LogSuzie, Warning,
+                TEXT("Could not resolve constructor-time GameplayEffect component %s for %s"),
+                *(*ComponentPaths)[Index],
+                *Object->GetPathName());
+        }
+    }
+
+    UE_LOG(LogSuzie, VeryVerbose,
+        TEXT("Pre-initialized GEComponents for %s from retail jmap (%d/%d resolved)"),
+        *Object->GetPathName(),
+        ResolvedCount,
+        ComponentPaths->Num());
+}
+
 static void ApplyGeneratedUHTEditorPropertyFlags(FProperty* Property)
 {
     if (Property == nullptr)
@@ -4712,6 +4871,19 @@ void FSuziePluginModule::PolymorphicClassConstructorInvocationHelper(const FObje
         ExecutePolymorphicClassConstructorFrameForDynamicClass(ObjectInitializer, DynamicClassHierarchyTree[i]);
     }
 
+    // UGameplayEffect::PostInitProperties runs after this synthetic class constructor
+    // returns. Seed constructor-critical retail GameplayEffect state now, while
+    // FObjectInitializer is still active. DurationPolicy must be correct before GAS
+    // validates component compatibility, and GEComponents must already contain every
+    // recreated GameplayEffectComponent default subobject.
+    if (bConstructingExactDynamicClass
+        && ConstructedObject != nullptr
+        && ConstructedObject->HasAnyFlags(RF_ClassDefaultObject))
+    {
+        ApplySuziePreInitGameplayEffectDurationPolicy(ObjectInitializer, TopLevelDynamicClass);
+        ApplySuziePreInitGameplayEffectComponents(ObjectInitializer, TopLevelDynamicClass);
+    }
+
     if (bShouldSeedDerivedClassCDO)
     {
         // Prefer the CDO's real archetype (normally the immediate superclass CDO),
@@ -5052,6 +5224,43 @@ void FSuziePluginModule::FinalizeClass(FDynamicClassGenerationContext& Context, 
 
     const TSharedPtr<FJsonObject> ClassDefaultObjectDefinition = Context.GlobalObjectMap->GetObjectField(ClassDefaultObjectPath);
     checkf(ClassDefaultObjectDefinition.IsValid(), TEXT("Failed to find default object by path %s"), *ClassDefaultObjectPath);
+
+    // GameplayAbilities validates GEComponents from UGameplayEffect::PostInitProperties.
+    // Suzie normally applies CDO property_values after GetDefaultObject(), which is too late
+    // for that validation. Capture the retail GEComponents array now so the synthetic
+    // constructor can populate it before PostInitProperties executes.
+    GSuziePreInitGameplayEffectComponentPaths.Remove(Class);
+    GSuziePreInitGameplayEffectDurationPolicies.Remove(Class);
+    if (ClassDefaultObjectDefinition->HasTypedField<EJson::Object>(TEXT("property_values")))
+    {
+        const TSharedPtr<FJsonObject> PropertyValues =
+            ClassDefaultObjectDefinition->GetObjectField(TEXT("property_values"));
+
+        const TSharedPtr<FJsonValue>* DurationPolicyValue =
+            PropertyValues->Values.Find(TEXT("DurationPolicy"));
+        if (DurationPolicyValue != nullptr
+            && DurationPolicyValue->IsValid()
+            && (*DurationPolicyValue)->Type == EJson::String)
+        {
+            GSuziePreInitGameplayEffectDurationPolicies.Add(
+                Class,
+                (*DurationPolicyValue)->AsString());
+        }
+
+        const TSharedPtr<FJsonValue>* GEComponentsValue = PropertyValues->Values.Find(TEXT("GEComponents"));
+        if (GEComponentsValue != nullptr && GEComponentsValue->IsValid()
+            && (*GEComponentsValue)->Type == EJson::Array)
+        {
+            TArray<FString>& ComponentPaths = GSuziePreInitGameplayEffectComponentPaths.Add(Class);
+            for (const TSharedPtr<FJsonValue>& ComponentValue : (*GEComponentsValue)->AsArray())
+            {
+                if (ComponentValue.IsValid() && ComponentValue->Type == EJson::String)
+                {
+                    ComponentPaths.Add(ComponentValue->AsString());
+                }
+            }
+        }
+    }
 
     // Iterate child objects of the class default object to find default subobjects that we want to construct before we deserialize the data
     FDynamicClassConstructionData& ClassConstructionData = DynamicClassConstructionData.FindOrAdd(Class);
